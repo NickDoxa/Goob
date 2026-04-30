@@ -1,0 +1,22 @@
+__pycache__/
+*.py[oc]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+build/
+dist/
+
+# Local-only context (kept out of public repo)
+CLAUDE.md
+.claude/
+documentation/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
