@@ -1,15 +1,8 @@
-# goob_brain
+# G.O.O.B.
+
+### Generative Optical Operational Bot
 
 Discord-controlled robotic arm with Claude vision. DM the bot, it grabs a frame from a camera mounted on a Braccio arm, sends image + text to Claude, and the arm physically responds.
-
-## Status
-
-Work in progress, built phase-by-phase.
-
-- [x] Phase 1 — Arduino serial protocol + Python `ArmController`
-- [ ] Phase 2 — Camera capture
-- [ ] Phase 3 — Claude vision + tool use
-- [ ] Phase 4 — Discord bot
 
 ## Hardware
 
@@ -25,10 +18,10 @@ The serial protocol spec lives at the top of `arduino/braccio_serial/braccio_ser
 ```
 arduino/braccio_serial/   Arduino sketch — line-based serial protocol
 src/
-  arm.py                  ArmController (serial)
-  camera.py               Phase 2
-  llm.py                  Phase 3
-  bot.py                  Phase 4
+  arm.py
+  camera.py
+  llm.py
+  bot.py
   config.py
 tests/                    manual smoke tests, one per phase
 ```
