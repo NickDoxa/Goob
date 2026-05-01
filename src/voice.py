@@ -29,6 +29,7 @@ Hard caps (all from config):
 from __future__ import annotations
 
 import collections
+import glob
 import logging
 import os
 import threading
@@ -69,23 +70,34 @@ class VoiceError(RuntimeError):
 def _resolve_onnx_model(wake_word: str) -> str:
     """Return the absolute path to the wake-word .onnx file.
 
-    openwakeword's name lookup ("hey_jarvis" → .../hey_jarvis.tflite) only
-    yields tflite paths, and we can't run tflite on Python 3.13 aarch64.
-    So we bypass the lookup by passing the full .onnx path. Downloads the
-    model into the package's models/ dir if it isn't already there.
+    openwakeword's name lookup ("hey_jarvis" → .../hey_jarvis_v0.1.tflite)
+    only yields tflite paths, and we can't run tflite on Python 3.13
+    aarch64. So we bypass the lookup by passing the full .onnx path.
+    Downloads the model into the package's models/ dir if missing. Files
+    are versioned (e.g. hey_jarvis_v0.1.onnx), so we glob.
     """
     pkg_dir = os.path.dirname(os.path.abspath(openwakeword.__file__))
     models_dir = os.path.join(pkg_dir, "resources", "models")
-    onnx_path = os.path.join(models_dir, f"{wake_word}.onnx")
-    if not os.path.exists(onnx_path):
+
+    def _find() -> Optional[str]:
+        # Match exact ("hey_jarvis.onnx") or versioned ("hey_jarvis_v0.1.onnx").
+        matches = sorted(
+            glob.glob(os.path.join(models_dir, f"{wake_word}.onnx"))
+            + glob.glob(os.path.join(models_dir, f"{wake_word}_v*.onnx"))
+        )
+        return matches[-1] if matches else None
+
+    found = _find()
+    if found is None:
         logger.info("downloading openWakeWord models for %r", wake_word)
         openwakeword.utils.download_models([wake_word])
-    if not os.path.exists(onnx_path):
+        found = _find()
+    if found is None:
         raise VoiceError(
             f"openwakeword .onnx file missing for {wake_word!r} "
             f"(looked in {models_dir})"
         )
-    return onnx_path
+    return found
 
 
 class VoiceListener:
