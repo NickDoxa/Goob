@@ -55,6 +55,8 @@ class Camera:
         ok, frame = self._cap.read()
         if not ok or frame is None:
             raise CameraError("camera read failed")
+        # Mount orients the camera upside down on the gripper.
+        frame = cv2.rotate(frame, cv2.ROTATE_180)
         ok, buf = cv2.imencode(
             ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85]
         )
