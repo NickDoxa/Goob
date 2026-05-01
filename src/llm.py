@@ -118,8 +118,11 @@ def ask_claude(
     user_text: str,
     capture: Callable[[], bytes],
     move: Callable[..., None],
-    max_turns: int = 6,
+    max_turns: int = 12,
 ) -> TurnResult:
+    # max_turns is LLM rounds, not tool calls. Claude can call multiple
+    # tools per turn, so 12 rounds easily supports 10+ moves/looks of
+    # iteration when the prompt encourages it.
     client = _get_client()
     messages: list[dict] = [
         {"role": "user", "content": user_text or "(no text)"}

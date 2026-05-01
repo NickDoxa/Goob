@@ -42,12 +42,23 @@ def main() -> None:
             # openwakeword, sounddevice, and a portaudio system dep.
             from src.voice import VoiceListener
 
+            voice_log = logging.getLogger("src.main.voice")
+
             def on_voice_query(transcript: str) -> None:
                 # Voice thread → discord event loop. client.loop is set by
                 # the time on_ready starts the listener, so this is safe.
-                asyncio.run_coroutine_threadsafe(
+                # We BLOCK the voice thread until the agentic loop finishes:
+                # leaving the wake-word mic stream open during a long query
+                # starves PortAudio (USB-bus contention with the Arducam
+                # camera + GIL pressure → ALSA xruns), and it also prevents
+                # stacking new voice queries on top of an in-flight one.
+                future = asyncio.run_coroutine_threadsafe(
                     client.handle_voice_query(transcript), client.loop
                 )
+                try:
+                    future.result(timeout=300)
+                except Exception:
+                    voice_log.exception("voice query failed or timed out")
 
             client.voice_listener = VoiceListener(
                 on_query=on_voice_query,
