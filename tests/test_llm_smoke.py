@@ -3,8 +3,7 @@
     python -m tests.test_llm_smoke
 
 Uses a real camera but a *mock* arm — moves are printed, not executed —
-so this can run without the Braccio powered on. The mock returns the same
-frame to keep the loop deterministic-ish.
+so this can run without the Braccio powered on.
 """
 from __future__ import annotations
 
@@ -21,10 +20,12 @@ def _mock_move(**kwargs) -> None:
 
 def _run(prompt: str, cam: Camera) -> None:
     print(f"\n>>> {prompt}")
-    initial = cam.capture_jpeg()
-    result = ask_claude(prompt, initial, cam.capture_jpeg, _mock_move)
+    result = ask_claude(prompt, cam.capture_jpeg, _mock_move)
     print(f"text: {result.text}")
-    print(f"moves: {result.move_count}, truncated: {result.truncated}")
+    print(
+        f"looks: {result.look_count}, moves: {result.move_count}, "
+        f"truncated: {result.truncated}"
+    )
 
 
 def main() -> None:
@@ -35,6 +36,7 @@ def main() -> None:
 
     print(f"opening camera {config.CAMERA_DEVICE}")
     with Camera(device=config.CAMERA_DEVICE) as cam:
+        _run("hey goob, how are you?", cam)
         _run("what do you see?", cam)
         _run("look around the room and tell me what's nearby", cam)
 

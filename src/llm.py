@@ -1,11 +1,18 @@
 """Claude vision + agentic tool loop.
 
-Each Discord turn calls `ask_claude(text, jpeg, capture, move)`. The function
-runs an agentic loop: send the conversation to Claude, execute every
-`move_arm` tool_use the response contains (calling `move(...)` then
-`capture()` for a fresh frame), feed the new image back as a tool_result,
-and repeat. Stops when Claude returns a non-tool response or when
-`max_turns` is hit.
+Each Discord (or voice) turn calls `ask_claude(text, capture, move)`. The
+function runs an agentic loop with two tools:
+
+- `look` — capture a fresh photo without moving. Used when Claude needs to
+  see what's currently in front of the camera.
+- `move_arm` — move the servos and return the new view. Used when Claude
+  needs to look elsewhere.
+
+The first turn carries no image — pure chit-chat ("how are you?") costs
+zero vision tokens. Claude requests vision only when the prompt actually
+needs it. After every tool call the resulting frame is fed back as a
+tool_result and the loop continues until Claude returns a non-tool reply
+or `max_turns` is hit.
 
 Personality lives in `documentation/GOOB.md` so we can iterate on the prompt
 without a code change.
@@ -23,6 +30,17 @@ import anthropic
 from src import config
 
 logger = logging.getLogger(__name__)
+
+LOOK_TOOL = {
+    "name": "look",
+    "description": (
+        "Take a fresh photo from your camera without moving. Use this when "
+        "the user asks about something visual, asks what you see, or you "
+        "otherwise need eyes on the room before answering. Returns the "
+        "current photo as the tool result."
+    ),
+    "input_schema": {"type": "object", "properties": {}, "required": []},
+}
 
 MOVE_ARM_TOOL = {
     "name": "move_arm",
@@ -54,13 +72,16 @@ MOVE_ARM_TOOL = {
     },
 }
 
+TOOLS = [LOOK_TOOL, MOVE_ARM_TOOL]
+
 
 @dataclass
 class TurnResult:
     text: str
     move_count: int
+    look_count: int
     truncated: bool
-    last_jpeg: bytes
+    last_jpeg: Optional[bytes]  # None if Claude never looked
 
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "documentation" / "GOOB.md"
@@ -95,23 +116,17 @@ def _final_text(content) -> str:
 
 def ask_claude(
     user_text: str,
-    initial_jpeg: bytes,
     capture: Callable[[], bytes],
     move: Callable[..., None],
     max_turns: int = 6,
 ) -> TurnResult:
     client = _get_client()
     messages: list[dict] = [
-        {
-            "role": "user",
-            "content": [
-                _image_block(initial_jpeg),
-                {"type": "text", "text": user_text or "(no text)"},
-            ],
-        }
+        {"role": "user", "content": user_text or "(no text)"}
     ]
     move_count = 0
-    last_jpeg = initial_jpeg
+    look_count = 0
+    last_jpeg: Optional[bytes] = None
     last_response = None
 
     for turn in range(max_turns):
@@ -119,7 +134,7 @@ def ask_claude(
             model=config.CLAUDE_MODEL,
             max_tokens=1024,
             system=SYSTEM_PROMPT,
-            tools=[MOVE_ARM_TOOL],
+            tools=TOOLS,
             messages=messages,
         )
         last_response = response
@@ -137,6 +152,7 @@ def ask_claude(
             return TurnResult(
                 text=_final_text(response.content),
                 move_count=move_count,
+                look_count=look_count,
                 truncated=False,
                 last_jpeg=last_jpeg,
             )
@@ -145,47 +161,68 @@ def ask_claude(
         for block in response.content:
             if block.type != "tool_use":
                 continue
-            if block.name != "move_arm":
+            if block.name == "look":
+                try:
+                    last_jpeg = capture()
+                    look_count += 1
+                except Exception as exc:
+                    logger.warning("look failed: %s", exc)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": f"camera capture failed: {exc}",
+                        "is_error": True,
+                    })
+                    continue
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": [
+                        {"type": "text", "text": "current view from the camera:"},
+                        _image_block(last_jpeg),
+                    ],
+                })
+            elif block.name == "move_arm":
+                args = dict(block.input)
+                logger.info("agentic move %d: %s", move_count + 1, args)
+                try:
+                    move(**args)
+                except Exception as exc:
+                    logger.warning("move failed: %s", exc)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": f"move failed: {exc}",
+                        "is_error": True,
+                    })
+                    continue
+                move_count += 1
+                try:
+                    last_jpeg = capture()
+                except Exception as exc:
+                    logger.warning("recapture failed: %s", exc)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": f"moved but camera recapture failed: {exc}",
+                        "is_error": True,
+                    })
+                    continue
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": [
+                        {"type": "text", "text": "moved; here is the new view from the camera:"},
+                        _image_block(last_jpeg),
+                    ],
+                })
+            else:
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
                     "content": f"unknown tool: {block.name}",
                     "is_error": True,
                 })
-                continue
-            args = dict(block.input)
-            logger.info("agentic move %d: %s", move_count + 1, args)
-            try:
-                move(**args)
-            except Exception as exc:
-                logger.warning("move failed: %s", exc)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": f"move failed: {exc}",
-                    "is_error": True,
-                })
-                continue
-            move_count += 1
-            try:
-                last_jpeg = capture()
-            except Exception as exc:
-                logger.warning("recapture failed: %s", exc)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": f"moved but camera recapture failed: {exc}",
-                    "is_error": True,
-                })
-                continue
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": [
-                    {"type": "text", "text": "moved; here is the new view from the camera"},
-                    _image_block(last_jpeg),
-                ],
-            })
         messages.append({"role": "user", "content": tool_results})
 
     text = _final_text(last_response.content) if last_response else ""
@@ -194,6 +231,7 @@ def ask_claude(
     return TurnResult(
         text=text,
         move_count=move_count,
+        look_count=look_count,
         truncated=True,
         last_jpeg=last_jpeg,
     )

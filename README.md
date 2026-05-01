@@ -57,3 +57,65 @@ python -m tests.test_camera_smoke
 writes a JPEG of one frame to `/tmp/frame.jpg`. On the Uno Q the `/dev/videoN` indices flip across reboots because the Qualcomm Venus hardware encoder and the Arducam race for them. Use the stable symlink in `.env` instead — `ls /dev/v4l/by-id/` and pick the `*-video-index0` entry (index1 is the metadata node). The default in `.env.example` already points at the Arducam's by-id path.
 
 Setup for later phases (Discord bot, Anthropic API) lands as those phases ship.
+
+## Voice frontend (optional)
+
+Talk to Goob with a wake word. Wake-word detection and speech-to-text both
+run locally — no audio leaves the device until the magic word fires and rate
+limits clear, at which point the transcript goes to Claude exactly like a
+Discord DM would.
+
+1. System dep on Linux:
+
+   ```bash
+   sudo apt install libportaudio2 portaudio19-dev
+   ```
+
+2. Install the voice extra:
+
+   ```bash
+   pip install -e .[voice]
+   ```
+
+   This pulls in `faster-whisper`, `openwakeword`, `webrtcvad-wheels`,
+   `sounddevice`, and `numpy`. First run downloads the Whisper model
+   (`tiny.en` is ~75 MB) and the openWakeWord ONNX models.
+
+3. Find the audio input device:
+
+   ```bash
+   python -m sounddevice
+   ```
+
+   Note a substring of the mic's name (e.g. `USB`, `Vitade`). Leave
+   `AUDIO_INPUT_DEVICE` empty to use the system default.
+
+4. Flip on voice in `.env`:
+
+   ```
+   VOICE_ENABLED=true
+   WAKE_WORD=hey_jarvis           # or alexa / hey_mycroft
+   AUDIO_INPUT_DEVICE=             # or "Vitade", etc.
+   WHISPER_MODEL=tiny.en           # or base.en for more accuracy
+   MAX_AUDIO_SECONDS=15
+   MIN_QUERY_INTERVAL_S=5
+   MAX_QUERIES_PER_HOUR=30
+   ```
+
+5. Run the smoke test before going live:
+
+   ```bash
+   python -m tests.test_voice_smoke
+   ```
+
+   It records 5 s, transcribes, then waits for one wake-word hit. No Claude
+   calls, no Discord. Useful for verifying mic + models without burning
+   tokens.
+
+Custom wake words ("hey goob") aren't built in — openWakeWord ships with
+`alexa`, `hey_jarvis`, and `hey_mycroft`. Training a custom model is a
+separate project; the hooks are in place if you ever want to swap one in.
+
+When voice is on, `python -m src.main` starts the listener alongside the
+Discord client. Spoken queries reply in DM, prefixed with `_(voice)_` so you
+can tell which channel a turn came from.
