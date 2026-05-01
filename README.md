@@ -71,18 +71,24 @@ Discord DM would.
    sudo apt install libportaudio2 portaudio19-dev
    ```
 
-2. Install the voice extra:
+2. Install the voice extra and openWakeWord:
 
    ```bash
    pip install -e .[voice]
-   pip install --no-deps openwakeword>=0.6
+   pip install requests scipy scikit-learn tqdm
+   pip install --no-deps 'openwakeword>=0.6'
    ```
 
-   The first line pulls in `faster-whisper`, `webrtcvad-wheels`,
-   `sounddevice`, `numpy`, and (transitively) `onnxruntime`. The second
-   line adds openWakeWord without its `tflite-runtime` requirement, which
-   has no Python 3.13 aarch64 wheel. We run openWakeWord on the ONNX
-   backend instead (forced in `src/voice.py`), so tflite is never imported.
+   - Line 1 pulls in `faster-whisper`, `webrtcvad-wheels`, `sounddevice`,
+     `numpy`, and (transitively) `onnxruntime`.
+   - Line 2 adds openWakeWord's runtime deps (we'll install it with
+     `--no-deps` next so we have to bring these by hand).
+   - Line 3 adds openWakeWord itself, skipping its `tflite-runtime` pin
+     which has no Python 3.13 aarch64 wheel. We run on the ONNX backend
+     instead (forced in `src/voice.py`), so tflite is never imported.
+
+   The single quotes around `openwakeword>=0.6` matter — without them
+   bash sees `>=0.6` as a stdout redirect.
 
    First run downloads the Whisper model (`tiny.en` is ~75 MB) and the
    openWakeWord ONNX models (~few MB each).

@@ -30,12 +30,14 @@ from __future__ import annotations
 
 import collections
 import logging
+import os
 import threading
 import time
 from typing import Callable, Optional
 
 import numpy as np
 import openwakeword
+import openwakeword.utils
 import sounddevice as sd
 import webrtcvad
 from faster_whisper import WhisperModel
@@ -62,6 +64,28 @@ SILENCE_CHUNKS = 9
 
 class VoiceError(RuntimeError):
     """Voice frontend misconfigured or hardware unavailable."""
+
+
+def _resolve_onnx_model(wake_word: str) -> str:
+    """Return the absolute path to the wake-word .onnx file.
+
+    openwakeword's name lookup ("hey_jarvis" → .../hey_jarvis.tflite) only
+    yields tflite paths, and we can't run tflite on Python 3.13 aarch64.
+    So we bypass the lookup by passing the full .onnx path. Downloads the
+    model into the package's models/ dir if it isn't already there.
+    """
+    pkg_dir = os.path.dirname(os.path.abspath(openwakeword.__file__))
+    models_dir = os.path.join(pkg_dir, "resources", "models")
+    onnx_path = os.path.join(models_dir, f"{wake_word}.onnx")
+    if not os.path.exists(onnx_path):
+        logger.info("downloading openWakeWord models for %r", wake_word)
+        openwakeword.utils.download_models([wake_word])
+    if not os.path.exists(onnx_path):
+        raise VoiceError(
+            f"openwakeword .onnx file missing for {wake_word!r} "
+            f"(looked in {models_dir})"
+        )
+    return onnx_path
 
 
 class VoiceListener:
@@ -101,10 +125,9 @@ class VoiceListener:
             self.whisper_model_name, device="cpu", compute_type="int8"
         )
         logger.info("loading openWakeWord model %r (onnx)", self.wake_word)
-        # Force ONNX backend: tflite-runtime has no Python 3.13 wheel on
-        # aarch64, so the tflite path is not installable on the Uno Q.
+        onnx_path = _resolve_onnx_model(self.wake_word)
         self._oww = openwakeword.Model(
-            wakeword_models=[self.wake_word],
+            wakeword_models=[onnx_path],
             inference_framework="onnx",
         )
 

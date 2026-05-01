@@ -29,6 +29,7 @@ from src.voice import (
     CHUNK_SAMPLES,
     SAMPLE_RATE,
     WAKE_THRESHOLD,
+    _resolve_onnx_model,
 )
 
 RECORD_SECONDS = 5
@@ -70,7 +71,10 @@ def step_wake_word() -> None:
     print(
         f"\n=== say {config.WAKE_WORD!r} — waiting up to {WAKE_TIMEOUT_S}s ==="
     )
-    oww = openwakeword.Model(wakeword_models=[config.WAKE_WORD])
+    onnx_path = _resolve_onnx_model(config.WAKE_WORD)
+    oww = openwakeword.Model(
+        wakeword_models=[onnx_path], inference_framework="onnx"
+    )
     deadline = time.monotonic() + WAKE_TIMEOUT_S
     fired = False
     with sd.RawInputStream(
