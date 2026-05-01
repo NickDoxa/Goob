@@ -38,6 +38,10 @@ class Camera:
             raise CameraError(f"could not open camera {self.device!r}")
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        # Hint to the driver: keep the queue at one frame so reads are
+        # current. Not all V4L2 drivers honor this, hence the drain in
+        # capture_jpeg as a backup.
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         # Auto-exposure is bad for the first couple of frames; toss them.
         for _ in range(3):
             cap.read()
@@ -52,6 +56,11 @@ class Camera:
     def capture_jpeg(self) -> bytes:
         if self._cap is None:
             self._cap = self._open()
+        # Drain stale frames buffered by the V4L2 driver since the last
+        # call. Without this, infrequent captures return frames from
+        # minutes ago — the queue holds up to ~4 frames.
+        for _ in range(4):
+            self._cap.grab()
         ok, frame = self._cap.read()
         if not ok or frame is None:
             raise CameraError("camera read failed")
