@@ -20,6 +20,11 @@ CAMERA_DEVICE: int | str = int(_camera_raw) if _camera_raw.isdigit() else _camer
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 
+DISCORD_TOKEN: str = os.getenv("DISCORD_TOKEN", "")
+_owner_raw = os.getenv("OWNER_USER_ID", "0")
+OWNER_USER_ID: int = int(_owner_raw) if _owner_raw else 0
+DEBUG_ATTACH_FRAME: bool = os.getenv("DEBUG_ATTACH_FRAME", "false").lower() == "true"
+
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 SYSTEM_PROMPT = """\
