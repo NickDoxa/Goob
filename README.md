@@ -46,4 +46,14 @@ tests/                    manual smoke tests, one per phase
 
    The arm should home, swing the base to 45°, swing to 135°, and home again.
 
-Setup for later phases (camera, Discord bot, Anthropic API) lands as those phases ship.
+## Quick start (Phase 2)
+
+After the env is set up:
+
+```bash
+python -m tests.test_camera_smoke
+```
+
+writes a JPEG of one frame to `/tmp/frame.jpg`. On the Uno Q the USB Arducam ends up at `/dev/video2` because the Qualcomm Venus hardware video encoder claims `/dev/video0`–`/dev/video1`. Set `CAMERA_DEVICE_INDEX=2` in `.env`. Confirm with `v4l2-ctl --list-devices`.
+
+Setup for later phases (Discord bot, Anthropic API) lands as those phases ship.
