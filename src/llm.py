@@ -1,24 +1,22 @@
-"""Claude vision + tool use for Phase 3.
+"""Claude vision + agentic tool loop.
 
-The arm is exposed as the `move_arm` tool. Two-phase conversation:
+Each Discord turn calls `ask_claude(text, jpeg, capture, move)`. The function
+runs an agentic loop: send the conversation to Claude, execute every
+`move_arm` tool_use the response contains (calling `move(...)` then
+`capture()` for a fresh frame), feed the new image back as a tool_result,
+and repeat. Stops when Claude returns a non-tool response or when
+`max_turns` is hit.
 
-1. `ask_claude(text, image)` — first turn. Claude either replies in plain
-   text (no movement) or returns a `move_arm` tool_use block. When a tool is
-   used Claude usually emits no narration, so the response also carries the
-   conversation state needed for the follow-up.
-2. `continue_after_tool(response, result)` — second turn, called by the bot
-   after the arm physically moved (or failed). Feeds the result back so
-   Claude can comment on what it just did.
-
-If Claude happens to emit text alongside the tool_use in turn 1, we use that
-and skip the follow-up call.
+Personality lives in `documentation/GOOB.md` so we can iterate on the prompt
+without a code change.
 """
 from __future__ import annotations
 
 import base64
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from pathlib import Path
+from typing import Callable, Optional
 
 import anthropic
 
@@ -29,10 +27,10 @@ logger = logging.getLogger(__name__)
 MOVE_ARM_TOOL = {
     "name": "move_arm",
     "description": (
-        "Move the 6-servo Braccio robotic arm to a specific pose. "
-        "Use this when the user asks you to look somewhere, point at something, "
-        "wave, nod, or otherwise move. All angles are in degrees. "
-        "If you don't need to move, don't call this tool."
+        "Move the 6-servo Braccio robotic arm to a specific pose, then return "
+        "a fresh photo of the new view. Use to look at things, look around, "
+        "point, wave, or otherwise gesture. Call multiple times in a single "
+        "turn to scan or zero in on something. All angles are degrees."
     ),
     "input_schema": {
         "type": "object",
@@ -50,7 +48,7 @@ MOVE_ARM_TOOL = {
             "gripper":    {"type": "integer", "minimum": 10, "maximum": 73,
                            "description": "Gripper. 10 is open, 73 is closed."},
             "step_delay": {"type": "integer", "minimum": 10, "maximum": 30,
-                           "description": "Per-step delay in ms. 20 is a normal speed.", "default": 20},
+                           "description": "Per-step delay in ms. 20 is normal speed.", "default": 20},
         },
         "required": ["base", "shoulder", "elbow", "wrist_v", "wrist_r", "gripper"],
     },
@@ -58,20 +56,15 @@ MOVE_ARM_TOOL = {
 
 
 @dataclass
-class ClaudeResponse:
+class TurnResult:
     text: str
-    movement: Optional[dict] = None
-    # Conversation state needed if a follow-up turn is required to convert
-    # a tool_use into a verbal response. Set when `movement` was produced
-    # and `text` is empty.
-    _user_content: Optional[list] = None
-    _assistant_content: Optional[list] = None
-    _tool_use_id: Optional[str] = None
+    move_count: int
+    truncated: bool
+    last_jpeg: bytes
 
-    @property
-    def needs_followup(self) -> bool:
-        return self._tool_use_id is not None
 
+_PROMPT_PATH = Path(__file__).resolve().parent.parent / "documentation" / "GOOB.md"
+SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
 
 _client: Optional[anthropic.Anthropic] = None
 
@@ -85,85 +78,122 @@ def _get_client() -> anthropic.Anthropic:
     return _client
 
 
-def ask_claude(user_text: str, image_jpeg: bytes) -> ClaudeResponse:
-    client = _get_client()
-    image_b64 = base64.standard_b64encode(image_jpeg).decode("ascii")
-    user_content = [
-        {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/jpeg",
-                "data": image_b64,
-            },
+def _image_block(jpeg: bytes) -> dict:
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/jpeg",
+            "data": base64.standard_b64encode(jpeg).decode("ascii"),
         },
-        {"type": "text", "text": user_text},
-    ]
-    response = client.messages.create(
-        model=config.CLAUDE_MODEL,
-        max_tokens=1024,
-        system=config.SYSTEM_PROMPT,
-        tools=[MOVE_ARM_TOOL],
-        messages=[{"role": "user", "content": user_content}],
-    )
-
-    text_parts: list[str] = []
-    movement: Optional[dict] = None
-    tool_use_id: Optional[str] = None
-    for block in response.content:
-        if block.type == "text":
-            text_parts.append(block.text)
-        elif block.type == "tool_use" and block.name == "move_arm" and movement is None:
-            movement = dict(block.input)
-            tool_use_id = block.id
-
-    usage = response.usage
-    logger.info(
-        "claude call: stop=%s in=%d out=%d movement=%s",
-        response.stop_reason, usage.input_tokens, usage.output_tokens,
-        movement is not None,
-    )
-
-    text = "\n".join(text_parts).strip()
-    needs_followup = movement is not None and not text
-    return ClaudeResponse(
-        text=text,
-        movement=movement,
-        _user_content=user_content if needs_followup else None,
-        _assistant_content=[b.model_dump() for b in response.content] if needs_followup else None,
-        _tool_use_id=tool_use_id if needs_followup else None,
-    )
+    }
 
 
-def continue_after_tool(prev: ClaudeResponse, tool_result: str) -> str:
-    """Send a tool_result follow-up. Returns Claude's narration of the action."""
-    if not prev.needs_followup:
-        raise RuntimeError("no pending tool_use on this response")
+def _final_text(content) -> str:
+    return "\n".join(b.text for b in content if b.type == "text").strip()
+
+
+def ask_claude(
+    user_text: str,
+    initial_jpeg: bytes,
+    capture: Callable[[], bytes],
+    move: Callable[..., None],
+    max_turns: int = 6,
+) -> TurnResult:
     client = _get_client()
-    response = client.messages.create(
-        model=config.CLAUDE_MODEL,
-        max_tokens=1024,
-        system=config.SYSTEM_PROMPT,
-        tools=[MOVE_ARM_TOOL],
-        messages=[
-            {"role": "user", "content": prev._user_content},
-            {"role": "assistant", "content": prev._assistant_content},
-            {
-                "role": "user",
+    messages: list[dict] = [
+        {
+            "role": "user",
+            "content": [
+                _image_block(initial_jpeg),
+                {"type": "text", "text": user_text or "(no text)"},
+            ],
+        }
+    ]
+    move_count = 0
+    last_jpeg = initial_jpeg
+    last_response = None
+
+    for turn in range(max_turns):
+        response = client.messages.create(
+            model=config.CLAUDE_MODEL,
+            max_tokens=1024,
+            system=SYSTEM_PROMPT,
+            tools=[MOVE_ARM_TOOL],
+            messages=messages,
+        )
+        last_response = response
+        usage = response.usage
+        logger.info(
+            "claude turn %d: stop=%s in=%d out=%d",
+            turn, response.stop_reason, usage.input_tokens, usage.output_tokens,
+        )
+
+        messages.append(
+            {"role": "assistant", "content": [b.model_dump() for b in response.content]}
+        )
+
+        if response.stop_reason != "tool_use":
+            return TurnResult(
+                text=_final_text(response.content),
+                move_count=move_count,
+                truncated=False,
+                last_jpeg=last_jpeg,
+            )
+
+        tool_results: list[dict] = []
+        for block in response.content:
+            if block.type != "tool_use":
+                continue
+            if block.name != "move_arm":
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": f"unknown tool: {block.name}",
+                    "is_error": True,
+                })
+                continue
+            args = dict(block.input)
+            logger.info("agentic move %d: %s", move_count + 1, args)
+            try:
+                move(**args)
+            except Exception as exc:
+                logger.warning("move failed: %s", exc)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": f"move failed: {exc}",
+                    "is_error": True,
+                })
+                continue
+            move_count += 1
+            try:
+                last_jpeg = capture()
+            except Exception as exc:
+                logger.warning("recapture failed: %s", exc)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": f"moved but camera recapture failed: {exc}",
+                    "is_error": True,
+                })
+                continue
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
                 "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": prev._tool_use_id,
-                        "content": tool_result,
-                    }
+                    {"type": "text", "text": "moved; here is the new view from the camera"},
+                    _image_block(last_jpeg),
                 ],
-            },
-        ],
+            })
+        messages.append({"role": "user", "content": tool_results})
+
+    text = _final_text(last_response.content) if last_response else ""
+    if not text:
+        text = "(stopped after looking around several times without settling on an answer)"
+    return TurnResult(
+        text=text,
+        move_count=move_count,
+        truncated=True,
+        last_jpeg=last_jpeg,
     )
-    text_parts = [b.text for b in response.content if b.type == "text"]
-    usage = response.usage
-    logger.info(
-        "claude followup: stop=%s in=%d out=%d",
-        response.stop_reason, usage.input_tokens, usage.output_tokens,
-    )
-    return "\n".join(text_parts).strip()

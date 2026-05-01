@@ -1,7 +1,8 @@
 """Discord frontend. Owner-DM-only; one turn per message.
 
-Capture, Claude, optional arm move, reply. Sync work (capture/serial) is
-offloaded to threads so we don't stall the event loop.
+The agentic loop in `ask_claude` may call the arm and recapture the camera
+multiple times before answering. We hand it bound methods, run the whole
+thing in a worker thread, and post the final text + last frame.
 """
 from __future__ import annotations
 
@@ -11,9 +12,9 @@ import logging
 
 import discord
 
-from src.arm import ArmController, ArmError
+from src.arm import ArmController
 from src.camera import Camera
-from src.llm import ask_claude, continue_after_tool
+from src.llm import ask_claude
 
 logger = logging.getLogger(__name__)
 
@@ -55,45 +56,39 @@ class GoobClient(discord.Client):
 
         async with message.channel.typing():
             try:
-                jpeg = await asyncio.to_thread(self.camera.capture_jpeg)
+                initial_jpeg = await asyncio.to_thread(self.camera.capture_jpeg)
             except Exception as exc:
                 logger.exception("camera capture failed")
                 await message.reply(f"camera error: {exc}")
                 return
 
             try:
-                resp = await asyncio.to_thread(ask_claude, message.content, jpeg)
+                result = await asyncio.to_thread(
+                    ask_claude,
+                    message.content,
+                    initial_jpeg,
+                    self.camera.capture_jpeg,
+                    self.arm.move,
+                )
             except Exception as exc:
                 logger.exception("claude call failed")
                 await message.reply(f"brain error: {exc}")
                 return
 
-            arm_status = ""
-            reply_text = (resp.text or "").strip()
-            if resp.movement is not None:
-                logger.info("arm move: %s", resp.movement)
-                try:
-                    await asyncio.to_thread(self.arm.move, **resp.movement)
-                    tool_result = "ok, arm moved to the requested pose"
-                    arm_status = "\n_(moved)_"
-                except ArmError as exc:
-                    logger.warning("arm error: %s", exc)
-                    tool_result = f"arm move failed: {exc}"
-                    arm_status = f"\n_(arm error: {exc})_"
+            suffix = ""
+            if result.move_count == 1:
+                suffix = "\n_(moved)_"
+            elif result.move_count > 1:
+                suffix = f"\n_(moved {result.move_count}×)_"
+            if result.truncated:
+                suffix += "\n_(stopped at max moves)_"
 
-                if resp.needs_followup:
-                    try:
-                        reply_text = await asyncio.to_thread(
-                            continue_after_tool, resp, tool_result
-                        )
-                    except Exception as exc:
-                        logger.exception("claude followup failed")
-
-            if not reply_text and not arm_status:
-                reply_text = "(no response)"
+            text = result.text or "(no response)"
 
             files: list[discord.File] = []
             if self.attach_frame:
-                files.append(discord.File(io.BytesIO(jpeg), filename="frame.jpg"))
+                files.append(
+                    discord.File(io.BytesIO(result.last_jpeg), filename="frame.jpg")
+                )
 
-            await message.reply(reply_text + arm_status, files=files)
+            await message.reply(text + suffix, files=files)
