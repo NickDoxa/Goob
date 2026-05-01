@@ -54,6 +54,6 @@ After the env is set up:
 python -m tests.test_camera_smoke
 ```
 
-writes a JPEG of one frame to `/tmp/frame.jpg`. On the Uno Q the USB Arducam ends up at `/dev/video2` because the Qualcomm Venus hardware video encoder claims `/dev/video0`–`/dev/video1`. Set `CAMERA_DEVICE_INDEX=2` in `.env`. Confirm with `v4l2-ctl --list-devices`.
+writes a JPEG of one frame to `/tmp/frame.jpg`. On the Uno Q the `/dev/videoN` indices flip across reboots because the Qualcomm Venus hardware encoder and the Arducam race for them. Use the stable symlink in `.env` instead — `ls /dev/v4l/by-id/` and pick the `*-video-index0` entry (index1 is the metadata node). The default in `.env.example` already points at the Arducam's by-id path.
 
 Setup for later phases (Discord bot, Anthropic API) lands as those phases ship.

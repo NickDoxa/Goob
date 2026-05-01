@@ -4,7 +4,8 @@
 
 Prereqs:
 - USB UVC camera (Arducam) on the host's USB bus.
-- /dev/video0 present (set CAMERA_DEVICE_INDEX in .env if not 0).
+- CAMERA_DEVICE in .env points to a /dev/v4l/by-id/* path (stable across
+  reboots) or to a numeric /dev/videoN index.
 
 After it runs, view /tmp/frame.jpg (scp it off the Uno Q) and confirm
 it looks like the room.
@@ -27,8 +28,8 @@ def main() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    print(f"opening camera index {config.CAMERA_DEVICE_INDEX}")
-    with Camera(device_index=config.CAMERA_DEVICE_INDEX) as cam:
+    print(f"opening camera {config.CAMERA_DEVICE}")
+    with Camera(device=config.CAMERA_DEVICE) as cam:
         jpeg = cam.capture_jpeg()
         print(f"got {len(jpeg)} bytes")
         OUT_PATH.write_bytes(jpeg)

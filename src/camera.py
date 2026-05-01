@@ -21,11 +21,11 @@ class CameraError(RuntimeError):
 class Camera:
     def __init__(
         self,
-        device_index: int = 0,
+        device: int | str = 0,
         width: int = 1280,
         height: int = 720,
     ) -> None:
-        self.device_index = device_index
+        self.device = device
         self.width = width
         self.height = height
         self._cap: Optional[cv2.VideoCapture] = None
@@ -33,12 +33,9 @@ class Camera:
     def _open(self) -> cv2.VideoCapture:
         # Pin the V4L2 backend — auto-detect on Debian sometimes picks
         # GStreamer and stalls on the first read.
-        cap = cv2.VideoCapture(self.device_index, cv2.CAP_V4L2)
+        cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
         if not cap.isOpened():
-            raise CameraError(
-                f"could not open camera at index {self.device_index} "
-                f"(is /dev/video{self.device_index} present?)"
-            )
+            raise CameraError(f"could not open camera {self.device!r}")
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         # Auto-exposure is bad for the first couple of frames; toss them.
@@ -47,8 +44,8 @@ class Camera:
         actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         logger.info(
-            "camera opened: index=%d %dx%d (requested %dx%d)",
-            self.device_index, actual_w, actual_h, self.width, self.height,
+            "camera opened: device=%s %dx%d (requested %dx%d)",
+            self.device, actual_w, actual_h, self.width, self.height,
         )
         return cap
 
