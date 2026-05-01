@@ -75,11 +75,17 @@ Discord DM would.
 
    ```bash
    pip install -e .[voice]
+   pip install --no-deps openwakeword>=0.6
    ```
 
-   This pulls in `faster-whisper`, `openwakeword`, `webrtcvad-wheels`,
-   `sounddevice`, and `numpy`. First run downloads the Whisper model
-   (`tiny.en` is ~75 MB) and the openWakeWord ONNX models.
+   The first line pulls in `faster-whisper`, `webrtcvad-wheels`,
+   `sounddevice`, `numpy`, and (transitively) `onnxruntime`. The second
+   line adds openWakeWord without its `tflite-runtime` requirement, which
+   has no Python 3.13 aarch64 wheel. We run openWakeWord on the ONNX
+   backend instead (forced in `src/voice.py`), so tflite is never imported.
+
+   First run downloads the Whisper model (`tiny.en` is ~75 MB) and the
+   openWakeWord ONNX models (~few MB each).
 
 3. Find the audio input device:
 

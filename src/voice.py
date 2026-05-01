@@ -100,8 +100,13 @@ class VoiceListener:
         self._whisper = WhisperModel(
             self.whisper_model_name, device="cpu", compute_type="int8"
         )
-        logger.info("loading openWakeWord model %r", self.wake_word)
-        self._oww = openwakeword.Model(wakeword_models=[self.wake_word])
+        logger.info("loading openWakeWord model %r (onnx)", self.wake_word)
+        # Force ONNX backend: tflite-runtime has no Python 3.13 wheel on
+        # aarch64, so the tflite path is not installable on the Uno Q.
+        self._oww = openwakeword.Model(
+            wakeword_models=[self.wake_word],
+            inference_framework="onnx",
+        )
 
         self._stop.clear()
         self._thread = threading.Thread(
