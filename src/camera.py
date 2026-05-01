@@ -1,0 +1,79 @@
+"""V4L2 camera capture for the gripper-mounted Arducam.
+
+Pairs with PLAN.md §Phase 2. The capture device is opened lazily on the
+first call and kept open for the process lifetime — opening cv2.VideoCapture
+is slow on Linux and reopening per-call thrashes the device.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+import cv2
+
+logger = logging.getLogger(__name__)
+
+
+class CameraError(RuntimeError):
+    """Camera device missing, busy, or producing bad frames."""
+
+
+class Camera:
+    def __init__(
+        self,
+        device_index: int = 0,
+        width: int = 1280,
+        height: int = 720,
+    ) -> None:
+        self.device_index = device_index
+        self.width = width
+        self.height = height
+        self._cap: Optional[cv2.VideoCapture] = None
+
+    def _open(self) -> cv2.VideoCapture:
+        # Pin the V4L2 backend — auto-detect on Debian sometimes picks
+        # GStreamer and stalls on the first read.
+        cap = cv2.VideoCapture(self.device_index, cv2.CAP_V4L2)
+        if not cap.isOpened():
+            raise CameraError(
+                f"could not open camera at index {self.device_index} "
+                f"(is /dev/video{self.device_index} present?)"
+            )
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        # Auto-exposure is bad for the first couple of frames; toss them.
+        for _ in range(3):
+            cap.read()
+        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        logger.info(
+            "camera opened: index=%d %dx%d (requested %dx%d)",
+            self.device_index, actual_w, actual_h, self.width, self.height,
+        )
+        return cap
+
+    def capture_jpeg(self) -> bytes:
+        if self._cap is None:
+            self._cap = self._open()
+        ok, frame = self._cap.read()
+        if not ok or frame is None:
+            raise CameraError("camera read failed")
+        ok, buf = cv2.imencode(
+            ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+        )
+        if not ok:
+            raise CameraError("jpeg encode failed")
+        return buf.tobytes()
+
+    def close(self) -> None:
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            finally:
+                self._cap = None
+
+    def __enter__(self) -> "Camera":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()

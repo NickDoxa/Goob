@@ -1,8 +1,6 @@
 """Settings loaded from .env / environment.
 
-Phase 1 only consumes ARM_SERIAL_PORT and LOG_LEVEL. The rest of the keys
-in .env.example are reserved for later phases — they're listed here as
-defaults so adding them later is a one-liner.
+Grows phase by phase. Keys not yet consumed live in .env.example only.
 """
 from __future__ import annotations
 
@@ -13,4 +11,5 @@ from dotenv import load_dotenv
 load_dotenv()
 
 ARM_SERIAL_PORT: str = os.getenv("ARM_SERIAL_PORT", "/dev/ttyACM0")
+CAMERA_DEVICE_INDEX: int = int(os.getenv("CAMERA_DEVICE_INDEX", "0"))
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
