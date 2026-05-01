@@ -84,8 +84,21 @@ class TurnResult:
     last_jpeg: Optional[bytes]  # None if Claude never looked
 
 
-_PROMPT_PATH = Path(__file__).resolve().parent.parent / "documentation" / "GOOB.md"
-SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
+_DOCS = Path(__file__).resolve().parent.parent / "documentation"
+
+
+def _load_system_prompt() -> str:
+    # GOOB.md is required (personality + behavior). MOVEMENT.md is optional;
+    # if present it appends a Braccio kinematics guide so Claude knows how
+    # the joints combine, not just what each one does in isolation.
+    parts = [(_DOCS / "GOOB.md").read_text(encoding="utf-8")]
+    movement = _DOCS / "MOVEMENT.md"
+    if movement.exists():
+        parts.append(movement.read_text(encoding="utf-8"))
+    return "\n\n---\n\n".join(parts)
+
+
+SYSTEM_PROMPT = _load_system_prompt()
 
 _client: Optional[anthropic.Anthropic] = None
 
