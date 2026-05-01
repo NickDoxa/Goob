@@ -12,14 +12,17 @@ import logging
 
 from src import config
 from src.camera import Camera
-from src.llm import ask_claude
+from src.llm import ask_claude, continue_after_tool
 
 
 def _run(prompt: str, jpeg: bytes) -> None:
     print(f"\n>>> {prompt}")
     resp = ask_claude(prompt, jpeg)
-    print(f"text: {resp.text}")
+    print(f"text: {resp.text!r}")
     print(f"movement: {resp.movement}")
+    if resp.needs_followup:
+        followup = continue_after_tool(resp, "ok, arm moved to the requested pose")
+        print(f"followup: {followup}")
 
 
 def main() -> None:

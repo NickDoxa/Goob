@@ -13,7 +13,7 @@ import discord
 
 from src.arm import ArmController, ArmError
 from src.camera import Camera
-from src.llm import ask_claude
+from src.llm import ask_claude, continue_after_tool
 
 logger = logging.getLogger(__name__)
 
@@ -69,16 +69,26 @@ class GoobClient(discord.Client):
                 return
 
             arm_status = ""
+            reply_text = (resp.text or "").strip()
             if resp.movement is not None:
                 logger.info("arm move: %s", resp.movement)
                 try:
                     await asyncio.to_thread(self.arm.move, **resp.movement)
+                    tool_result = "ok, arm moved to the requested pose"
                     arm_status = "\n_(moved)_"
                 except ArmError as exc:
                     logger.warning("arm error: %s", exc)
+                    tool_result = f"arm move failed: {exc}"
                     arm_status = f"\n_(arm error: {exc})_"
 
-            reply_text = (resp.text or "").strip()
+                if resp.needs_followup:
+                    try:
+                        reply_text = await asyncio.to_thread(
+                            continue_after_tool, resp, tool_result
+                        )
+                    except Exception as exc:
+                        logger.exception("claude followup failed")
+
             if not reply_text and not arm_status:
                 reply_text = "(no response)"
 
