@@ -52,4 +52,18 @@ MIN_QUERY_INTERVAL_S: float = float(_min_interval) if _min_interval else 5.0
 _max_per_hour = os.getenv("MAX_QUERIES_PER_HOUR", "30")
 MAX_QUERIES_PER_HOUR: int = int(_max_per_hour) if _max_per_hour else 30
 
+# --- Session memory ---
+# Goob keeps conversation history between turns so "wrong wall, look at the
+# other one" works. History is in-memory, single-owner. Both Discord and
+# voice queries share the same context.
+#
+# Idle timeout: drop history after this many seconds of silence so a stale
+# topic from yesterday doesn't poison today's chat.
+_session_idle = os.getenv("SESSION_IDLE_S", "300")
+SESSION_IDLE_S: float = float(_session_idle) if _session_idle else 300.0
+# Image budget: keep this many recent images in history; older ones get
+# replaced with a placeholder. Vision tokens are expensive; text is cheap.
+_session_imgs = os.getenv("SESSION_MAX_IMAGES", "3")
+SESSION_MAX_IMAGES: int = int(_session_imgs) if _session_imgs else 3
+
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

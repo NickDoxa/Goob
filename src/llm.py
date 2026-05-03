@@ -116,6 +116,7 @@ class TurnResult:
     look_count: int
     truncated: bool
     last_jpeg: Optional[bytes]  # None if Claude never looked
+    messages: list[dict]  # full transcript after this turn — caller persists
 
 
 _DOCS = Path(__file__).resolve().parent.parent / "documentation"
@@ -166,15 +167,19 @@ def ask_claude(
     capture: Callable[[], bytes],
     move: Callable[..., None],
     go_to_pose: Callable[[str], None],
+    prior_messages: Optional[list[dict]] = None,
     max_turns: int = 12,
 ) -> TurnResult:
     # max_turns is LLM rounds, not tool calls. Claude can call multiple
     # tools per turn, so 12 rounds easily supports 10+ moves/looks of
     # iteration when the prompt encourages it.
+    #
+    # prior_messages is the transcript from previous turns in the same
+    # session. Pass None (or []) for a fresh conversation. Caller is
+    # responsible for image-trimming and idle-expiry.
     client = _get_client()
-    messages: list[dict] = [
-        {"role": "user", "content": user_text or "(no text)"}
-    ]
+    messages: list[dict] = list(prior_messages) if prior_messages else []
+    messages.append({"role": "user", "content": user_text or "(no text)"})
     move_count = 0
     look_count = 0
     last_jpeg: Optional[bytes] = None
@@ -206,6 +211,7 @@ def ask_claude(
                 look_count=look_count,
                 truncated=False,
                 last_jpeg=last_jpeg,
+                messages=messages,
             )
 
         tool_results: list[dict] = []
@@ -320,4 +326,5 @@ def ask_claude(
         look_count=look_count,
         truncated=True,
         last_jpeg=last_jpeg,
+        messages=messages,
     )

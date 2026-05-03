@@ -4,21 +4,89 @@ No auto-capture: ask_claude only sees what it asks to see (look or
 move_arm). Pure chit-chat costs zero vision tokens. The voice listener (if
 enabled) routes transcribed queries through the same agentic flow and
 replies via DM.
+
+Session memory: conversation history is kept in-memory across turns so
+follow-up like "wrong wall, look at the other one" works. After an idle
+timeout (config.SESSION_IDLE_S), history clears. Old images get replaced
+with placeholders past config.SESSION_MAX_IMAGES to bound vision tokens.
+Voice and Discord share the same history.
 """
 from __future__ import annotations
 
 import asyncio
+import copy
 import io
 import logging
+import threading
+import time
 from typing import Optional
 
 import discord
 
+from src import config
 from src.arm import ArmController
 from src.camera import Camera
 from src.llm import TurnResult, ask_claude
 
 logger = logging.getLogger(__name__)
+
+
+def _trim_old_images(messages: list[dict], keep_last_n: int) -> list[dict]:
+    """Replace image blocks beyond the last N with placeholder text.
+
+    Walks newest → oldest, counting image blocks inside tool_result content.
+    Once the budget is spent, further (older) image blocks are replaced with
+    "[earlier photo elided]". Tool_use/tool_result IDs stay paired, so the
+    API still accepts the trimmed transcript. Returns a deep copy.
+    """
+    out = copy.deepcopy(messages)
+    seen = 0
+    for msg in reversed(out):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "tool_result":
+                continue
+            tr_content = block.get("content")
+            if not isinstance(tr_content, list):
+                continue
+            for i in range(len(tr_content) - 1, -1, -1):
+                inner = tr_content[i]
+                if isinstance(inner, dict) and inner.get("type") == "image":
+                    if seen < keep_last_n:
+                        seen += 1
+                    else:
+                        tr_content[i] = {
+                            "type": "text",
+                            "text": "[earlier photo elided to save tokens]",
+                        }
+    return out
+
+
+def _trim_to_complete(messages: list[dict]) -> list[dict]:
+    """Drop trailing dangling tool_use blocks.
+
+    Anthropic's API rejects a transcript whose last assistant turn has
+    tool_use blocks without matching tool_result follow-ups. If a turn
+    truncated at max_turns, the assistant's last message is exactly
+    that. Walk back to the last assistant message that's pure text
+    (a clean completion) and return everything up to and including it.
+    """
+    end = len(messages)
+    while end > 0:
+        m = messages[end - 1]
+        if m.get("role") == "assistant":
+            content = m.get("content", [])
+            if isinstance(content, list) and not any(
+                isinstance(b, dict) and b.get("type") == "tool_use"
+                for b in content
+            ):
+                return messages[:end]
+        end -= 1
+    return []
 
 
 class GoobClient(discord.Client):
@@ -39,6 +107,32 @@ class GoobClient(discord.Client):
         self.attach_frame = attach_frame
         # Set by main.py before run() if VOICE_ENABLED.
         self.voice_listener = None
+        # Session memory. Lock guards both fields together so a voice query
+        # mid-DM-reply can't read a half-updated history.
+        self._history: list[dict] = []
+        self._history_at: float = 0.0
+        self._history_lock = threading.Lock()
+
+    def _take_prior(self) -> list[dict]:
+        """Return the trimmed prior transcript, or [] if expired/empty."""
+        with self._history_lock:
+            if not self._history:
+                return []
+            age = time.monotonic() - self._history_at
+            if age > config.SESSION_IDLE_S:
+                logger.info(
+                    "session idle %.0fs > %.0fs cap, forgetting context",
+                    age, config.SESSION_IDLE_S,
+                )
+                self._history = []
+                return []
+            prior = self._history
+        return _trim_old_images(prior, config.SESSION_MAX_IMAGES)
+
+    def _commit_history(self, messages: list[dict]) -> None:
+        with self._history_lock:
+            self._history = messages
+            self._history_at = time.monotonic()
 
     async def on_ready(self) -> None:
         logger.info("logged in as %s, locked to owner %d", self.user, self.owner_id)
@@ -54,13 +148,19 @@ class GoobClient(discord.Client):
                 logger.exception("voice listener failed to start")
 
     async def _run_turn(self, user_text: str) -> TurnResult:
-        return await asyncio.to_thread(
+        prior = self._take_prior()
+        result = await asyncio.to_thread(
             ask_claude,
             user_text,
             self.camera.capture_jpeg,
             self.arm.move,
             self.arm.move_to_pose,
+            prior,
         )
+        # _trim_to_complete is a no-op on clean completions and salvages
+        # the prefix on max-turns truncations.
+        self._commit_history(_trim_to_complete(result.messages))
+        return result
 
     def _format_suffix(self, result: TurnResult) -> str:
         suffix = ""
