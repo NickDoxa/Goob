@@ -115,6 +115,16 @@ MOVE_ARM_TOOL = {
                          "description": "Elbow fold. 90 = straight; higher folds the arm back over itself."},
             "wrist_v":  {"type": "integer", "minimum": 0,  "maximum": 180,
                          "description": "Camera tilt relative to forearm. 90 = level; lower tilts down; higher tilts up."},
+            "wrist_r":  {"type": "integer", "minimum": 0,  "maximum": 180,
+                         "description": (
+                             "Wrist roll (camera spin around the gripper's "
+                             "axis). 90 = upright baseline. Set to other "
+                             "values for personality moves like spinning the "
+                             "camera. The image is rotated back to upright "
+                             "automatically, so subsequent analysis still "
+                             "works at any wrist_r value. Default 90 if "
+                             "you're not deliberately spinning."
+                         )},
         },
         "required": ["base", "shoulder", "elbow", "wrist_v"],
     },

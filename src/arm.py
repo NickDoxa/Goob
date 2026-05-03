@@ -35,9 +35,9 @@ LIMITS = ServoLimits()
 
 # Named preset poses. Keys are passed verbatim to Claude via the go_to_pose
 # tool, so the names should be self-documenting. Values must include all six
-# servo angles. wrist_r is always 90 — the camera is mounted upside-down on
-# the gripper and Camera.capture_jpeg compensates with a 180° image rotation,
-# which only stays correct while wrist_r is at its baseline.
+# servo angles. wrist_r=90 is the upright baseline for the camera; Camera
+# rotates the image dynamically based on the wrist_r passed at capture, so
+# Claude is free to spin the wrist for personality moves.
 #
 # scan_left / scan_right are USER-perspective: scan_right swings toward the
 # user's right side, which is the arm's PHYSICAL left (base toward 180).
@@ -80,6 +80,11 @@ class ArmController:
         self.timeout = timeout
         self.ready_timeout = ready_timeout
         self._ser: Optional[serial.Serial] = None
+        # Tracked state. Camera reads current_wrist_r at capture time so it
+        # can rotate the frame back to upright regardless of where the
+        # gripper is currently rolled. After Braccio.begin() the arm sits
+        # at all-90, so 90 is the correct initial value.
+        self.current_wrist_r: int = 90
 
     def __enter__(self) -> "ArmController":
         self._ser = serial.Serial(self.port, self.baudrate, timeout=0.5)
@@ -139,8 +144,8 @@ class ArmController:
         gripper: int = 10,
         step_delay: int = 10,
     ) -> None:
-        # Defaults: wrist_r=90 keeps the camera-flip in Camera valid; gripper=10
-        # is open (visual tasks don't care); step_delay=10 is the fastest the
+        # Defaults: wrist_r=90 is the camera-upright baseline; gripper=10 is
+        # open (visual tasks don't care); step_delay=10 is the fastest the
         # Braccio library accepts without servo jitter.
         b  = _clamp("base",       base,       *LIMITS.base)
         s  = _clamp("shoulder",   shoulder,   *LIMITS.shoulder)
@@ -150,6 +155,9 @@ class ArmController:
         g  = _clamp("gripper",    gripper,    *LIMITS.gripper)
         d  = _clamp("step_delay", step_delay, *LIMITS.step_delay)
         self._send_and_wait(f"MOVE {d} {b} {s} {e} {wv} {wr} {g}")
+        # Update tracked state only after the Arduino confirms OK, so a
+        # failed move doesn't leave Camera applying stale rotation.
+        self.current_wrist_r = wr
 
     def move_to_pose(self, name: str) -> None:
         """Snap to a named preset from POSES."""

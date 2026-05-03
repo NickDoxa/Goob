@@ -3,6 +3,11 @@
 Pairs with PLAN.md §Phase 2. The capture device is opened lazily on the
 first call and kept open for the process lifetime — opening cv2.VideoCapture
 is slow on Linux and reopening per-call thrashes the device.
+
+The camera is mounted upside-down on the gripper. capture_jpeg takes the
+arm's current wrist_r value and rotates the image so it always comes out
+upright — at the baseline (wrist_r=90) that's a 180° rotation, and Claude
+can spin the gripper without breaking image-axis reasoning.
 """
 from __future__ import annotations
 
@@ -16,6 +21,25 @@ logger = logging.getLogger(__name__)
 
 class CameraError(RuntimeError):
     """Camera device missing, busy, or producing bad frames."""
+
+
+def _rotate_image(frame, deg: int):
+    """Rotate `frame` by `deg` degrees counter-clockwise. Fast paths for
+    90° increments; arbitrary angles fall back to warpAffine and crop the
+    output the same size as the input (corner pixels become black).
+    """
+    deg = deg % 360
+    if deg == 0:
+        return frame
+    if deg == 90:
+        return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    if deg == 180:
+        return cv2.rotate(frame, cv2.ROTATE_180)
+    if deg == 270:
+        return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    h, w = frame.shape[:2]
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), deg, 1.0)
+    return cv2.warpAffine(frame, M, (w, h))
 
 
 class Camera:
@@ -53,7 +77,7 @@ class Camera:
         )
         return cap
 
-    def capture_jpeg(self) -> bytes:
+    def capture_jpeg(self, wrist_r: int = 90) -> bytes:
         if self._cap is None:
             self._cap = self._open()
         # Drain stale frames buffered by the V4L2 driver since the last
@@ -64,8 +88,13 @@ class Camera:
         ok, frame = self._cap.read()
         if not ok or frame is None:
             raise CameraError("camera read failed")
-        # Mount orients the camera upside down on the gripper.
-        frame = cv2.rotate(frame, cv2.ROTATE_180)
+        # Image rotation = 180° (upside-down mount) + (wrist_r - 90)°
+        # deviation from the camera-upright baseline. If the rotation
+        # direction comes out backwards in practice, flip the sign of
+        # the deviation term — the Braccio servo direction is hardware-
+        # specific and easier to verify empirically than to reason about.
+        rot_deg = (180 + (wrist_r - 90)) % 360
+        frame = _rotate_image(frame, rot_deg)
         ok, buf = cv2.imencode(
             ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85]
         )

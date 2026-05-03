@@ -147,12 +147,18 @@ class GoobClient(discord.Client):
             except Exception:
                 logger.exception("voice listener failed to start")
 
+    def _capture(self) -> bytes:
+        # Camera reads the arm's current wrist roll so it can rotate the
+        # frame back to upright. Lets Claude spin the gripper for fun
+        # without breaking image-axis reasoning on subsequent looks.
+        return self.camera.capture_jpeg(self.arm.current_wrist_r)
+
     async def _run_turn(self, user_text: str) -> TurnResult:
         prior = self._take_prior()
         result = await asyncio.to_thread(
             ask_claude,
             user_text,
-            self.camera.capture_jpeg,
+            self._capture,
             self.arm.move,
             self.arm.move_to_pose,
             prior,
