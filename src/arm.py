@@ -33,6 +33,20 @@ class ServoLimits:
 
 LIMITS = ServoLimits()
 
+# Named preset poses. Keys are passed verbatim to Claude via the go_to_pose
+# tool, so the names should be self-documenting. Values must include all six
+# servo angles. wrist_r is always 90 — the camera is mounted upside-down on
+# the gripper and Camera.capture_jpeg compensates with a 180° image rotation,
+# which only stays correct while wrist_r is at its baseline.
+POSES: dict[str, dict[str, int]] = {
+    "home":          dict(base=90,  shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
+    "look_at_hands": dict(base=90,  shoulder=75,  elbow=80,  wrist_v=70,  wrist_r=90, gripper=10),
+    "look_down":     dict(base=90,  shoulder=130, elbow=140, wrist_v=40,  wrist_r=90, gripper=10),
+    "look_up":       dict(base=90,  shoulder=110, elbow=60,  wrist_v=140, wrist_r=90, gripper=10),
+    "scan_left":     dict(base=150, shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
+    "scan_right":    dict(base=30,  shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
+}
+
 
 def _clamp(name: str, value: int, lo: int, hi: int) -> int:
     if lo <= value <= hi:
@@ -116,10 +130,13 @@ class ArmController:
         shoulder: int,
         elbow: int,
         wrist_v: int,
-        wrist_r: int,
-        gripper: int,
-        step_delay: int = 20,
+        wrist_r: int = 90,
+        gripper: int = 10,
+        step_delay: int = 10,
     ) -> None:
+        # Defaults: wrist_r=90 keeps the camera-flip in Camera valid; gripper=10
+        # is open (visual tasks don't care); step_delay=10 is the fastest the
+        # Braccio library accepts without servo jitter.
         b  = _clamp("base",       base,       *LIMITS.base)
         s  = _clamp("shoulder",   shoulder,   *LIMITS.shoulder)
         e  = _clamp("elbow",      elbow,      *LIMITS.elbow)
@@ -128,3 +145,9 @@ class ArmController:
         g  = _clamp("gripper",    gripper,    *LIMITS.gripper)
         d  = _clamp("step_delay", step_delay, *LIMITS.step_delay)
         self._send_and_wait(f"MOVE {d} {b} {s} {e} {wv} {wr} {g}")
+
+    def move_to_pose(self, name: str) -> None:
+        """Snap to a named preset from POSES."""
+        if name not in POSES:
+            raise ArmError(f"unknown pose {name!r}; have {sorted(POSES)}")
+        self.move(**POSES[name])

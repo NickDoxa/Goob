@@ -1,12 +1,14 @@
 """Claude vision + agentic tool loop.
 
-Each Discord (or voice) turn calls `ask_claude(text, capture, move)`. The
-function runs an agentic loop with two tools:
+Each Discord (or voice) turn calls `ask_claude(text, capture, move,
+go_to_pose)`. The function runs an agentic loop with three tools:
 
-- `look` — capture a fresh photo without moving. Used when Claude needs to
-  see what's currently in front of the camera.
-- `move_arm` — move the servos and return the new view. Used when Claude
-  needs to look elsewhere.
+- `look` — capture a fresh photo without moving.
+- `go_to_pose` — snap to a named preset (home, look_at_hands, look_down,
+  look_up, scan_left, scan_right). Faster and more reliable than reasoning
+  out 6 joint angles for common scenarios.
+- `move_arm` — fine-grained joint control. Used to refine after a preset,
+  or for poses that don't match a named preset.
 
 The first turn carries no image — pure chit-chat ("how are you?") costs
 zero vision tokens. Claude requests vision only when the prompt actually
@@ -14,8 +16,15 @@ needs it. After every tool call the resulting frame is fed back as a
 tool_result and the loop continues until Claude returns a non-tool reply
 or `max_turns` is hit.
 
-Personality lives in `documentation/GOOB.md` so we can iterate on the prompt
-without a code change.
+`wrist_r` and `step_delay` are intentionally NOT exposed to Claude:
+- wrist_r=90 is locked because Camera.capture_jpeg does a 180° rotation
+  to compensate for the upside-down mount, and that compensation only
+  stays correct at the baseline wrist roll.
+- step_delay defaults to 10 ms (fastest) inside ArmController; Claude
+  never benefits from slowing down deliberately.
+
+Personality lives in `documentation/GOOB.md`; arm kinematics live in
+`documentation/MOVEMENT.md`. Both load at module import.
 """
 from __future__ import annotations
 
@@ -28,6 +37,7 @@ from typing import Callable, Optional
 import anthropic
 
 from src import config
+from src.arm import POSES
 
 logger = logging.getLogger(__name__)
 
@@ -42,37 +52,61 @@ LOOK_TOOL = {
     "input_schema": {"type": "object", "properties": {}, "required": []},
 }
 
-MOVE_ARM_TOOL = {
-    "name": "move_arm",
+GO_TO_POSE_TOOL = {
+    "name": "go_to_pose",
     "description": (
-        "Move the 6-servo Braccio robotic arm to a specific pose, then return "
-        "a fresh photo of the new view. Use to look at things, look around, "
-        "point, wave, or otherwise gesture. Call multiple times in a single "
-        "turn to scan or zero in on something. All angles are degrees."
+        "Snap to a named preset pose, then return a fresh photo of the new "
+        "view. Faster and more reliable than reasoning out joint angles. "
+        "Available presets:\n"
+        "  - home: upright, looking forward (use before final answers)\n"
+        "  - look_at_hands: angled toward the user's chest/desk (good first "
+        "    move when asked about hands or held objects)\n"
+        "  - look_down: top-down view of the desk in front of the arm\n"
+        "  - look_up: angled upward toward ceiling/face\n"
+        "  - scan_left: panned to the user's left\n"
+        "  - scan_right: panned to the user's right\n"
+        "After a preset, refine with move_arm if the subject isn't centered."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "base":       {"type": "integer", "minimum": 0,  "maximum": 180,
-                           "description": "Rotation around the base. 90 is forward, 0 is full right, 180 is full left."},
-            "shoulder":   {"type": "integer", "minimum": 15, "maximum": 165,
-                           "description": "Shoulder pitch. 90 is upright, lower values lean forward."},
-            "elbow":      {"type": "integer", "minimum": 0,  "maximum": 180,
-                           "description": "Elbow angle. 90 is straight, 180 is fully folded."},
-            "wrist_v":    {"type": "integer", "minimum": 0,  "maximum": 180,
-                           "description": "Wrist vertical (pitch). 90 is level."},
-            "wrist_r":    {"type": "integer", "minimum": 0,  "maximum": 180,
-                           "description": "Wrist rotation (roll). 90 is neutral."},
-            "gripper":    {"type": "integer", "minimum": 10, "maximum": 73,
-                           "description": "Gripper. 10 is open, 73 is closed."},
-            "step_delay": {"type": "integer", "minimum": 10, "maximum": 30,
-                           "description": "Per-step delay in ms. 20 is normal speed.", "default": 20},
+            "pose": {
+                "type": "string",
+                "enum": sorted(POSES.keys()),
+                "description": "Name of the preset pose to move to.",
+            },
         },
-        "required": ["base", "shoulder", "elbow", "wrist_v", "wrist_r", "gripper"],
+        "required": ["pose"],
     },
 }
 
-TOOLS = [LOOK_TOOL, MOVE_ARM_TOOL]
+MOVE_ARM_TOOL = {
+    "name": "move_arm",
+    "description": (
+        "Fine-grained joint control. Use this when no preset fits, or to "
+        "refine a pose after go_to_pose. Returns a fresh photo of the new "
+        "view. Image-axis to joint mapping: subject on the right of the "
+        "image → DECREASE base; on the left → INCREASE base; at the "
+        "bottom → DECREASE wrist_v or shoulder (tilt down); at the "
+        "top → INCREASE wrist_v (tilt up)."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "base":     {"type": "integer", "minimum": 0,  "maximum": 180,
+                         "description": "Pan. 90 = forward, 0 = full right, 180 = full left."},
+            "shoulder": {"type": "integer", "minimum": 15, "maximum": 165,
+                         "description": "Shoulder pitch. 90 = upright; lower leans forward; higher leans back."},
+            "elbow":    {"type": "integer", "minimum": 0,  "maximum": 180,
+                         "description": "Elbow fold. 90 = straight; higher folds the arm back over itself."},
+            "wrist_v":  {"type": "integer", "minimum": 0,  "maximum": 180,
+                         "description": "Camera tilt relative to forearm. 90 = level; lower tilts down; higher tilts up."},
+        },
+        "required": ["base", "shoulder", "elbow", "wrist_v"],
+    },
+}
+
+TOOLS = [LOOK_TOOL, GO_TO_POSE_TOOL, MOVE_ARM_TOOL]
 
 
 @dataclass
@@ -131,6 +165,7 @@ def ask_claude(
     user_text: str,
     capture: Callable[[], bytes],
     move: Callable[..., None],
+    go_to_pose: Callable[[str], None],
     max_turns: int = 12,
 ) -> TurnResult:
     # max_turns is LLM rounds, not tool calls. Claude can call multiple
@@ -202,6 +237,7 @@ def ask_claude(
                 args = dict(block.input)
                 logger.info("agentic move %d: %s", move_count + 1, args)
                 try:
+                    # wrist_r, gripper, step_delay default inside ArmController.
                     move(**args)
                 except Exception as exc:
                     logger.warning("move failed: %s", exc)
@@ -229,6 +265,40 @@ def ask_claude(
                     "tool_use_id": block.id,
                     "content": [
                         {"type": "text", "text": "moved; here is the new view from the camera:"},
+                        _image_block(last_jpeg),
+                    ],
+                })
+            elif block.name == "go_to_pose":
+                pose_name = block.input.get("pose", "")
+                logger.info("agentic pose %d: %s", move_count + 1, pose_name)
+                try:
+                    go_to_pose(pose_name)
+                except Exception as exc:
+                    logger.warning("pose failed: %s", exc)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": f"pose failed: {exc}",
+                        "is_error": True,
+                    })
+                    continue
+                move_count += 1
+                try:
+                    last_jpeg = capture()
+                except Exception as exc:
+                    logger.warning("recapture failed: %s", exc)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": f"posed but camera recapture failed: {exc}",
+                        "is_error": True,
+                    })
+                    continue
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": [
+                        {"type": "text", "text": f"moved to {pose_name}; here is the new view:"},
                         _image_block(last_jpeg),
                     ],
                 })

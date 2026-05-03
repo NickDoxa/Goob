@@ -59,6 +59,7 @@ class GoobClient(discord.Client):
             user_text,
             self.camera.capture_jpeg,
             self.arm.move,
+            self.arm.move_to_pose,
         )
 
     def _format_suffix(self, result: TurnResult) -> str:
