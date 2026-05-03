@@ -38,13 +38,18 @@ LIMITS = ServoLimits()
 # servo angles. wrist_r is always 90 — the camera is mounted upside-down on
 # the gripper and Camera.capture_jpeg compensates with a 180° image rotation,
 # which only stays correct while wrist_r is at its baseline.
+#
+# scan_left / scan_right are USER-perspective: scan_right swings toward the
+# user's right side, which is the arm's PHYSICAL left (base toward 180).
+# The user is facing the arm; their right is the arm's left. We name from
+# the user's POV because that's what conversation uses.
 POSES: dict[str, dict[str, int]] = {
     "home":          dict(base=90,  shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
     "look_at_hands": dict(base=90,  shoulder=75,  elbow=80,  wrist_v=70,  wrist_r=90, gripper=10),
     "look_down":     dict(base=90,  shoulder=130, elbow=140, wrist_v=40,  wrist_r=90, gripper=10),
     "look_up":       dict(base=90,  shoulder=110, elbow=60,  wrist_v=140, wrist_r=90, gripper=10),
-    "scan_left":     dict(base=150, shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
-    "scan_right":    dict(base=30,  shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
+    "scan_left":     dict(base=30,  shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
+    "scan_right":    dict(base=150, shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
 }
 
 

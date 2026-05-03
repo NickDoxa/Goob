@@ -85,16 +85,30 @@ MOVE_ARM_TOOL = {
     "description": (
         "Fine-grained joint control. Use this when no preset fits, or to "
         "refine a pose after go_to_pose. Returns a fresh photo of the new "
-        "view. Image-axis to joint mapping: subject on the right of the "
-        "image → DECREASE base; on the left → INCREASE base; at the "
-        "bottom → DECREASE wrist_v or shoulder (tilt down); at the "
-        "top → INCREASE wrist_v (tilt up)."
+        "view.\n\n"
+        "DIRECTION CONVENTIONS — read carefully, these are mirrored:\n"
+        "- USER says 'right' or 'look right' → swing toward the user's "
+        "right side → INCREASE `base` toward 180. The user is facing you, "
+        "so their right is your physical left.\n"
+        "- USER says 'left' or 'look left' → DECREASE `base` toward 0.\n"
+        "- IMAGE-axis centering (subject visible in the current frame): "
+        "subject on the IMAGE'S right → DECREASE `base`; image's left → "
+        "INCREASE `base`. (The image's right is the user's left because "
+        "the camera mirrors them, like a webcam.)\n"
+        "- Subject at IMAGE'S bottom → tilt down: DECREASE `wrist_v` or "
+        "  `shoulder`. Top → tilt up: INCREASE `wrist_v`.\n"
+        "When in doubt about user-language right/left, default to the "
+        "user-perspective rule above."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "base":     {"type": "integer", "minimum": 0,  "maximum": 180,
-                         "description": "Pan. 90 = forward, 0 = full right, 180 = full left."},
+                         "description": (
+                             "Pan. 90 = forward (toward user). "
+                             "180 = swing to the USER'S right side. "
+                             "0 = swing to the USER'S left side."
+                         )},
             "shoulder": {"type": "integer", "minimum": 15, "maximum": 165,
                          "description": "Shoulder pitch. 90 = upright; lower leans forward; higher leans back."},
             "elbow":    {"type": "integer", "minimum": 0,  "maximum": 180,
