@@ -1,7 +1,8 @@
 """Claude vision + agentic tool loop.
 
 Each Discord (or voice) turn calls `ask_claude(text, capture, move,
-go_to_pose)`. The function runs an agentic loop with three tools:
+go_to_pose)`. The function runs an agentic loop with three client-side
+tools:
 
 - `look` — capture a fresh photo without moving.
 - `go_to_pose` — snap to a named preset (home, look_at_hands, look_down,
@@ -9,6 +10,13 @@ go_to_pose)`. The function runs an agentic loop with three tools:
   out 6 joint angles for common scenarios.
 - `move_arm` — fine-grained joint control. Used to refine after a preset,
   or for poses that don't match a named preset.
+
+Plus one server-side tool (enabled by config.WEB_SEARCH_ENABLED):
+
+- `web_search` — Anthropic's built-in search. The API handles the fetch
+  and citations server-side within one messages.create call; we just add
+  the tool to the list and count uses. Costs $10/1k searches on top of
+  token cost, so max_uses caps it per turn.
 
 The first turn carries no image — pure chit-chat ("how are you?") costs
 zero vision tokens. Claude requests vision only when the prompt actually
@@ -130,7 +138,27 @@ MOVE_ARM_TOOL = {
     },
 }
 
-TOOLS = [LOOK_TOOL, GO_TO_POSE_TOOL, MOVE_ARM_TOOL]
+def _build_tools() -> list[dict]:
+    tools: list[dict] = [LOOK_TOOL, GO_TO_POSE_TOOL, MOVE_ARM_TOOL]
+    if config.WEB_SEARCH_ENABLED:
+        # Anthropic server-side tool. Executed inside messages.create; we
+        # never see a client tool_use for it. max_uses caps searches per
+        # turn to bound cost ($10 per 1000 searches).
+        tools.append({
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": config.WEB_SEARCH_MAX_USES,
+        })
+    return tools
+
+
+TOOLS = _build_tools()
+# Log at import so it's obvious on restart which tools Claude actually got.
+# `type` is present on server-side tools, `name` on client-side.
+logger.info(
+    "claude tools registered: %s",
+    [t.get("name") or t.get("type") for t in TOOLS],
+)
 
 
 @dataclass
@@ -138,6 +166,7 @@ class TurnResult:
     text: str
     move_count: int
     look_count: int
+    web_search_count: int
     truncated: bool
     last_jpeg: Optional[bytes]  # None if Claude never looked
     messages: list[dict]  # full transcript after this turn — caller persists
@@ -206,6 +235,7 @@ def ask_claude(
     messages.append({"role": "user", "content": user_text or "(no text)"})
     move_count = 0
     look_count = 0
+    web_search_count = 0
     last_jpeg: Optional[bytes] = None
     last_response = None
 
@@ -224,15 +254,25 @@ def ask_claude(
             turn, response.stop_reason, usage.input_tokens, usage.output_tokens,
         )
 
+        # Count server-side tool uses (web_search) so the UI can report them.
+        for block in response.content:
+            btype = getattr(block, "type", None)
+            if btype == "server_tool_use" and getattr(block, "name", "") == "web_search":
+                web_search_count += 1
+
         messages.append(
             {"role": "assistant", "content": [b.model_dump() for b in response.content]}
         )
 
-        if response.stop_reason != "tool_use":
+        # Exit only on a real completion. "tool_use" means client-side tool
+        # follow-up needed; "pause_turn" means a server tool paused and we
+        # should re-invoke without adding a user message.
+        if response.stop_reason not in ("tool_use", "pause_turn"):
             return TurnResult(
                 text=_final_text(response.content),
                 move_count=move_count,
                 look_count=look_count,
+                web_search_count=web_search_count,
                 truncated=False,
                 last_jpeg=last_jpeg,
                 messages=messages,
@@ -339,7 +379,11 @@ def ask_claude(
                     "content": f"unknown tool: {block.name}",
                     "is_error": True,
                 })
-        messages.append({"role": "user", "content": tool_results})
+        if tool_results:
+            messages.append({"role": "user", "content": tool_results})
+        # If tool_results is empty and stop_reason was "pause_turn", the
+        # server-side tool has already appended its result to the assistant
+        # message. Re-invoke with no new user turn and let Claude continue.
 
     text = _final_text(last_response.content) if last_response else ""
     if not text:
@@ -348,6 +392,7 @@ def ask_claude(
         text=text,
         move_count=move_count,
         look_count=look_count,
+        web_search_count=web_search_count,
         truncated=True,
         last_jpeg=last_jpeg,
         messages=messages,

@@ -52,6 +52,15 @@ MIN_QUERY_INTERVAL_S: float = float(_min_interval) if _min_interval else 5.0
 _max_per_hour = os.getenv("MAX_QUERIES_PER_HOUR", "30")
 MAX_QUERIES_PER_HOUR: int = int(_max_per_hour) if _max_per_hour else 30
 
+# --- Web search (server-side Anthropic tool) ---
+# Adds a `web_search` tool Claude can call for current info (weather, news,
+# facts, live data). Runs server-side inside messages.create — no extra key,
+# no fetching code. Charged separately by Anthropic at ~$10 per 1000 searches
+# on top of normal token cost. Cap per-turn uses with WEB_SEARCH_MAX_USES.
+WEB_SEARCH_ENABLED: bool = os.getenv("WEB_SEARCH_ENABLED", "true").lower() == "true"
+_web_max = os.getenv("WEB_SEARCH_MAX_USES", "5")
+WEB_SEARCH_MAX_USES: int = int(_web_max) if _web_max else 5
+
 # --- Session memory ---
 # Goob keeps conversation history between turns so "wrong wall, look at the
 # other one" works. History is in-memory, single-owner. Both Discord and

@@ -174,6 +174,10 @@ class GoobClient(discord.Client):
             suffix += "\n_(moved)_"
         elif result.move_count > 1:
             suffix += f"\n_(moved {result.move_count}×)_"
+        if result.web_search_count == 1:
+            suffix += "\n_(searched online)_"
+        elif result.web_search_count > 1:
+            suffix += f"\n_(searched online {result.web_search_count}×)_"
         if result.truncated:
             suffix += "\n_(stopped at max moves)_"
         return suffix
