@@ -95,6 +95,14 @@ class Camera:
         # specific and easier to verify empirically than to reason about.
         rot_deg = (180 + (wrist_r - 90)) % 360
         frame = _rotate_image(frame, rot_deg)
+        h, w = frame.shape[:2]
+        long_edge = max(h, w)
+        if long_edge > 1024:
+            scale = 1024 / long_edge
+            frame = cv2.resize(
+                frame, (round(w * scale), round(h * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
         ok, buf = cv2.imencode(
             ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85]
         )

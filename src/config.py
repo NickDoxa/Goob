@@ -18,7 +18,7 @@ _camera_raw = os.getenv("CAMERA_DEVICE", "0")
 CAMERA_DEVICE: int | str = int(_camera_raw) if _camera_raw.isdigit() else _camera_raw
 
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
 
 DISCORD_TOKEN: str = os.getenv("DISCORD_TOKEN", "")
 _owner_raw = os.getenv("OWNER_USER_ID", "0")

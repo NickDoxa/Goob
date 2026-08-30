@@ -149,6 +149,10 @@ def _build_tools() -> list[dict]:
             "name": "web_search",
             "max_uses": config.WEB_SEARCH_MAX_USES,
         })
+    # Cache the whole tools array as part of the exact-match prefix (system
+    # + tools). Only the last block needs the marker — caching covers
+    # everything before it too.
+    tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}
     return tools
 
 
@@ -187,6 +191,13 @@ def _load_system_prompt() -> str:
 
 
 SYSTEM_PROMPT = _load_system_prompt()
+SYSTEM_BLOCKS = [
+    {
+        "type": "text",
+        "text": SYSTEM_PROMPT,
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+    }
+]
 
 _client: Optional[anthropic.Anthropic] = None
 
@@ -215,6 +226,36 @@ def _final_text(content) -> str:
     return "\n".join(b.text for b in content if b.type == "text").strip()
 
 
+def _strip_cache_control(messages: list[dict]) -> None:
+    # prior_messages (session history) may carry a stale breakpoint from a
+    # previous turn's last message, now buried mid-transcript. Clear all of
+    # them so only the new moving breakpoint below is set.
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict):
+                block.pop("cache_control", None)
+
+
+def _mark_moving_breakpoint(messages: list[dict]) -> None:
+    # Cache prefix breakpoint on the last content block of the last message,
+    # so the growing agentic transcript gets incremental hits round-to-round.
+    if not messages:
+        return
+    last = messages[-1]
+    content = last.get("content")
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+        last["content"] = content
+    if not isinstance(content, list) or not content:
+        return
+    block = content[-1]
+    if isinstance(block, dict):
+        block["cache_control"] = {"type": "ephemeral"}
+
+
 def ask_claude(
     user_text: str,
     capture: Callable[[], bytes],
@@ -240,18 +281,22 @@ def ask_claude(
     last_response = None
 
     for turn in range(max_turns):
+        _strip_cache_control(messages)
+        _mark_moving_breakpoint(messages)
         response = client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=SYSTEM_BLOCKS,
             tools=TOOLS,
             messages=messages,
         )
         last_response = response
         usage = response.usage
         logger.info(
-            "claude turn %d: stop=%s in=%d out=%d",
+            "claude turn %d: stop=%s in=%d out=%d cache_read=%d cache_creation=%d",
             turn, response.stop_reason, usage.input_tokens, usage.output_tokens,
+            getattr(usage, "cache_read_input_tokens", 0) or 0,
+            getattr(usage, "cache_creation_input_tokens", 0) or 0,
         )
 
         # Count server-side tool uses (web_search) so the UI can report them.
