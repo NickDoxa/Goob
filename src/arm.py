@@ -80,11 +80,19 @@ class ArmController:
         self.timeout = timeout
         self.ready_timeout = ready_timeout
         self._ser: Optional[serial.Serial] = None
-        # Tracked state. Camera reads current_wrist_r at capture time so it
-        # can rotate the frame back to upright regardless of where the
-        # gripper is currently rolled. After Braccio.begin() the arm sits
-        # at all-90, so 90 is the correct initial value.
-        self.current_wrist_r: int = 90
+        # Tracked pose. Camera reads current_wrist_r (below) at capture time
+        # so it can rotate the frame back to upright regardless of where the
+        # gripper is currently rolled. After Braccio.begin() the arm sits at
+        # the home pose, so that's the correct initial value.
+        self._pose: dict[str, int] = dict(POSES["home"])
+        # None = untested; True/False once a move has confirmed which
+        # protocol the connected firmware speaks. Sticky for the session so
+        # we don't retry EASE against known-old firmware on every call.
+        self._easing_supported: Optional[bool] = None
+
+    @property
+    def current_wrist_r(self) -> int:
+        return self._pose["wrist_r"]
 
     def __enter__(self) -> "ArmController":
         self._ser = serial.Serial(self.port, self.baudrate, timeout=0.5)
@@ -133,6 +141,7 @@ class ArmController:
 
     def home(self) -> None:
         self._send_and_wait("HOME")
+        self._pose = dict(POSES["home"])
 
     def move(
         self,
@@ -143,10 +152,12 @@ class ArmController:
         wrist_r: int = 90,
         gripper: int = 10,
         step_delay: int = 10,
+        duration_ms: Optional[int] = None,
     ) -> None:
         # Defaults: wrist_r=90 is the camera-upright baseline; gripper=10 is
-        # open (visual tasks don't care); step_delay=10 is the fastest the
-        # Braccio library accepts without servo jitter.
+        # open (visual tasks don't care). step_delay is a dead parameter now
+        # (kept only so existing callers don't need updating) — it's used
+        # solely for the legacy MOVE fallback below, never for EASE.
         b  = _clamp("base",       base,       *LIMITS.base)
         s  = _clamp("shoulder",   shoulder,   *LIMITS.shoulder)
         e  = _clamp("elbow",      elbow,      *LIMITS.elbow)
@@ -154,10 +165,33 @@ class ArmController:
         wr = _clamp("wrist_r",    wrist_r,    *LIMITS.wrist_r)
         g  = _clamp("gripper",    gripper,    *LIMITS.gripper)
         d  = _clamp("step_delay", step_delay, *LIMITS.step_delay)
+        target = dict(base=b, shoulder=s, elbow=e, wrist_v=wv, wrist_r=wr, gripper=g)
+
+        if duration_ms is None:
+            max_delta = max(abs(target[k] - self._pose[k]) for k in target)
+            duration_ms = max(300, min(1500, max_delta * 8))
+
+        if self._easing_supported is not False:
+            self._send(f"EASE {duration_ms} {b} {s} {e} {wv} {wr} {g}")
+            reply = self._readline()
+            logger.debug("<- %s", reply)
+            if reply == "OK":
+                self._easing_supported = True
+                self._pose = target
+                return
+            if reply == "ERR unknown":
+                if self._easing_supported is None:
+                    logger.warning("arm firmware does not support EASE; falling back to MOVE for this session")
+                self._easing_supported = False
+            elif reply.startswith("ERR"):
+                raise ArmError(reply)
+            else:
+                raise ArmError(f"unexpected reply: {reply!r}")
+
         self._send_and_wait(f"MOVE {d} {b} {s} {e} {wv} {wr} {g}")
         # Update tracked state only after the Arduino confirms OK, so a
         # failed move doesn't leave Camera applying stale rotation.
-        self.current_wrist_r = wr
+        self._pose = target
 
     def move_to_pose(self, name: str) -> None:
         """Snap to a named preset from POSES."""
