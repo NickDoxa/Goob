@@ -533,8 +533,14 @@ def _two_link_ik(wr: float, wz: float) -> list[tuple[float, float]]:
     """
     r2 = wr * wr + wz * wz
     cos_rel = (r2 - UPPER_ARM_MM ** 2 - FOREARM_MM ** 2) / (2 * UPPER_ARM_MM * FOREARM_MM)
-    if cos_rel < -1.0 or cos_rel > 1.0:
+    # The feasible-D interval endpoints place the arm exactly straight
+    # (cos_rel = 1) or maximally folded (= -1); float error then lands a
+    # hair outside [-1, 1] and acos would reject a geometrically valid
+    # boundary pose — at random, per target. Clamp near-boundary values;
+    # only reject clearly out-of-reach ones.
+    if cos_rel < -1.0 - 1e-9 or cos_rel > 1.0 + 1e-9:
         return []
+    cos_rel = max(-1.0, min(1.0, cos_rel))
     rel = math.acos(cos_rel)
     out = []
     for signed_rel in (rel, -rel):
