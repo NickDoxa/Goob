@@ -45,11 +45,27 @@ LIMITS = ServoLimits()
 # user's right, base 90 = facing the user, base 180 = the user's left, and
 # scan_left is the HIGH base value. tests/test_kinematics_smoke.py checks
 # these two against forward kinematics.
+#
+# The three PITCH presets were re-derived from the same hardware run, which
+# found the elbow and wrist_v conventions inverted in the old model (elbow
+# ABOVE 90 folds up/back; wrist_v ABOVE 90 tips toward the user and down —
+# see src/kinematics.py). Under the corrected model the gripper axis sits at
+# elevation `shoulder + elbow - wrist_v`, and the camera — bolted across the
+# gripper — looks 90 degrees off that:
+#
+#   camera elevation = shoulder + elbow - wrist_v - 90
+#
+#   pose            shoulder  elbow  wrist_v   camera elevation
+#   look_at_hands       75     100      110      -25  (toward the user)
+#   look_down          130      40      140      -60  (steeply at the desk)
+#   look_up             60     110       25      +55  (up, user's side)
+#
+# tests/test_kinematics_smoke.py checks each against forward kinematics.
 POSES: dict[str, dict[str, int]] = {
     "home":          dict(base=90,  shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
-    "look_at_hands": dict(base=90,  shoulder=75,  elbow=80,  wrist_v=70,  wrist_r=90, gripper=10),
-    "look_down":     dict(base=90,  shoulder=130, elbow=140, wrist_v=40,  wrist_r=90, gripper=10),
-    "look_up":       dict(base=90,  shoulder=110, elbow=60,  wrist_v=140, wrist_r=90, gripper=10),
+    "look_at_hands": dict(base=90,  shoulder=75,  elbow=100, wrist_v=110, wrist_r=90, gripper=10),
+    "look_down":     dict(base=90,  shoulder=130, elbow=40,  wrist_v=140, wrist_r=90, gripper=10),
+    "look_up":       dict(base=90,  shoulder=60,  elbow=110, wrist_v=25,  wrist_r=90, gripper=10),
     "scan_left":     dict(base=150, shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
     "scan_right":    dict(base=30,  shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
 }

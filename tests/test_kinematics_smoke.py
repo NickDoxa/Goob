@@ -103,35 +103,45 @@ def test_presets() -> None:
 
     hands_pos, hands_dir = forward_camera(POSES["look_at_hands"])
     check(
-        "look_at_hands looks toward the user and downward",
-        hands_dir[1] > 0.3 and hands_dir[2] < -0.05,
-        f"dy={hands_dir[1]:.2f} dz={hands_dir[2]:.2f}",
+        "look_at_hands aims ~25 degrees below horizontal at the user",
+        hands_dir[1] > 0.3 and -0.52 < hands_dir[2] < -0.32,
+        f"dy={hands_dir[1]:.2f} dz={hands_dir[2]:.2f} "
+        f"({math.degrees(math.asin(hands_dir[2])):.0f} deg)",
     )
     # Chest-height hands at (0, 35, 25) is the anchor llm.py publishes.
     t = (35.0 - hands_pos[1]) / hands_dir[1]
     z_at_hands = hands_pos[2] + t * hands_dir[2]
     check(
-        "look_at_hands ray is near chest height at y=35cm",
-        15.0 < z_at_hands < 35.0,
+        "look_at_hands ray passes near (0, 35, 25)",
+        20.0 < z_at_hands < 30.0,
         f"z={z_at_hands:.1f}cm at y=35cm",
     )
 
     down_pos, down_dir = forward_camera(POSES["look_down"])
     check(
-        "look_down looks steeply down",
-        down_dir[2] < -0.5,
-        f"dz={down_dir[2]:.2f}",
+        "look_down looks at least 50 degrees below horizontal",
+        down_dir[2] < -0.766,
+        f"dz={down_dir[2]:.2f} ({math.degrees(math.asin(down_dir[2])):.0f} deg)",
     )
     t = down_pos[2] / -down_dir[2]
     hit_y = down_pos[1] + t * down_dir[1]
     check(
-        "look_down lands on the desk in front of the base",
-        5.0 < hit_y < 45.0,
+        "look_down lands on the desk 15-25cm in front of the base",
+        15.0 < hit_y < 25.0,
         f"desk hit y={hit_y:.1f}cm",
     )
 
     _, up_dir = forward_camera(POSES["look_up"])
-    check("look_up looks upward", up_dir[2] > 0.5, f"dz={up_dir[2]:.2f}")
+    check(
+        "look_up looks at least 45 degrees above horizontal",
+        up_dir[2] > 0.707,
+        f"dz={up_dir[2]:.2f} ({math.degrees(math.asin(up_dir[2])):.0f} deg)",
+    )
+    check(
+        "look_up leans toward the user's side, not back over the base",
+        up_dir[1] > 0.0,
+        f"dy={up_dir[1]:.2f}",
+    )
 
     # scan_* rotate the base only, so the lens does not move — the horizontal
     # ray sweeps instead. That only works because the camera looks sideways
@@ -158,15 +168,17 @@ def test_presets() -> None:
 def test_conventions() -> None:
     """The servo fixed points, one assertion each.
 
-    These are exactly the claims Nick's hardware calibration confirms or
-    refutes. If one of these fails on the real arm, flip the sign in the
-    matching *_servo_to_chain function in src/kinematics.py and nothing else.
+    Every one of these mirrors a step of tests/test_direction_calibration.py,
+    which was run on the real arm (2026-08-30) with the user watching from
+    their normal seat. Those observations are ground truth. If one of these
+    fails on hardware again, flip the sign in the matching *_servo_to_chain
+    function in src/kinematics.py and nothing else.
     """
     print("\n== servo convention fixed points ==")
 
     # Lean the arm out horizontally so base rotation actually moves the lens.
-    # elbow 180 swings the forearm down and out (ELBOW_SIGN = -1).
-    out = dict(shoulder=90, elbow=180, wrist_v=90)
+    # elbow 0 swings the forearm down and out (ELBOW_SIGN = +1).
+    out = dict(shoulder=90, elbow=0, wrist_v=90)
 
     fwd, _ = forward_camera(_pose(base=90, **out))
     check(
@@ -197,17 +209,18 @@ def test_conventions() -> None:
         f"y {up_pos[1]:.1f} -> {lean_pos[1]:.1f}cm",
     )
 
-    # elbow 0 folds the forearm back over the shoulder: from the upright arm,
-    # the wrist ends up on the far side of the base from the user.
-    fold_pos, _ = forward_camera(_pose(base=90, shoulder=90, elbow=0))
+    # Calibration steps C and D, driven from home exactly as on the hardware:
+    # elbow 140 folded the forearm UP and BACK over the base, elbow 40 swung
+    # it DOWN and TOWARD the user. The discriminating axis is y.
+    fold_pos, _ = forward_camera(_pose(base=90, shoulder=90, elbow=140))
     check(
-        "elbow 0 folds back away from the user",
+        "elbow 140 folds up and back over the base",
         fold_pos[1] < -10.0,
         f"cam y={fold_pos[1]:.1f}cm",
     )
-    reach_pos, _ = forward_camera(_pose(base=90, shoulder=90, elbow=180))
+    reach_pos, _ = forward_camera(_pose(base=90, shoulder=90, elbow=40))
     check(
-        "elbow 180 swings out toward the user",
+        "elbow 40 swings down and out toward the user",
         reach_pos[1] > 10.0,
         f"cam y={reach_pos[1]:.1f}cm",
     )
@@ -218,18 +231,20 @@ def test_conventions() -> None:
         f"cam=({inline_pos[1]:.2f},{inline_pos[2]:.1f})",
     )
 
+    # Calibration steps E and F. The camera and gripper are mounted upside
+    # down, so wrist_v runs OPPOSITE to the elbow: raising it drops the view.
     _, level_dir = forward_camera(_pose(base=90, wrist_v=90))
-    _, down_dir = forward_camera(_pose(base=90, wrist_v=40))
-    _, up_dir = forward_camera(_pose(base=90, wrist_v=140))
+    _, wv140_dir = forward_camera(_pose(base=90, wrist_v=140))
+    _, wv40_dir = forward_camera(_pose(base=90, wrist_v=40))
     check(
-        "wrist_v below 90 tilts the camera down",
-        down_dir[2] < level_dir[2] - 0.5,
-        f"dz {level_dir[2]:.2f} -> {down_dir[2]:.2f}",
+        "wrist_v 140 tilts the view down, toward the user",
+        wv140_dir[2] < level_dir[2] - 0.5 and wv140_dir[1] > 0.3,
+        f"dz {level_dir[2]:.2f} -> {wv140_dir[2]:.2f}, dy={wv140_dir[1]:.2f}",
     )
     check(
-        "wrist_v above 90 tilts the camera up",
-        up_dir[2] > level_dir[2] + 0.5,
-        f"dz {level_dir[2]:.2f} -> {up_dir[2]:.2f}",
+        "wrist_v 40 tilts the view up",
+        wv40_dir[2] > level_dir[2] + 0.5,
+        f"dz {level_dir[2]:.2f} -> {wv40_dir[2]:.2f}",
     )
 
     # The solver has to agree with the same convention: the public frame's

@@ -85,7 +85,8 @@ Do not guess from a cropped view — that's how you hallucinate.
 
 These need a clear, centered, well-framed shot.
 1. Get the subject centered first.
-2. Get reasonably close — lower the shoulder, angle the wrist pitch in.
+2. Get reasonably close — lower `shoulder` to lean toward the subject,
+   then raise `wrist_v` to tilt your view back down onto it.
 3. THEN read. If the text is blurry or partial, move and try again
    rather than guessing the letters.
 

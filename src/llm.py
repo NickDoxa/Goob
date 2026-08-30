@@ -119,8 +119,13 @@ MOVE_ARM_TOOL = {
         "So: subject on the IMAGE'S right → INCREASE `base`; subject on "
         "the IMAGE'S left → DECREASE `base`. In short, always pan toward "
         "the side of the image the subject is drifting to.\n"
-        "- Subject at IMAGE'S bottom → tilt down: DECREASE `wrist_v` or "
-        "  `shoulder`. Top → tilt up: INCREASE `wrist_v`.\n"
+        "- PITCH, verified on the hardware: `elbow` ABOVE 90 folds the "
+        "forearm UP and BACK over your base, BELOW 90 swings it DOWN and OUT "
+        "toward the user. `wrist_v` ABOVE 90 tilts your view DOWN toward the "
+        "user, BELOW 90 tilts it UP. `shoulder` below 90 leans toward the "
+        "user.\n"
+        "- Subject at IMAGE'S bottom → tilt down: INCREASE `wrist_v` (or "
+        "DECREASE `shoulder`). Top → tilt up: DECREASE `wrist_v`.\n"
         "The two horizontal rules agree: a subject on the image's right IS "
         "on the user's left, and both say INCREASE `base`. If you ever "
         "derive opposite answers from them, you have flipped one — "
@@ -138,9 +143,19 @@ MOVE_ARM_TOOL = {
             "shoulder": {"type": "integer", "minimum": 15, "maximum": 165,
                          "description": "Shoulder pitch. 90 = upright; lower leans forward; higher leans back."},
             "elbow":    {"type": "integer", "minimum": 0,  "maximum": 180,
-                         "description": "Elbow fold. 90 = straight; higher folds the arm back over itself."},
+                         "description": (
+                             "Elbow fold. 90 = forearm straight, in line with "
+                             "the upper arm. ABOVE 90 folds the forearm UP and "
+                             "BACK over your base. BELOW 90 swings it DOWN and "
+                             "OUT toward the user — use this to reach low over "
+                             "the desk."
+                         )},
             "wrist_v":  {"type": "integer", "minimum": 0,  "maximum": 180,
-                         "description": "Camera tilt relative to forearm. 90 = level; lower tilts down; higher tilts up."},
+                         "description": (
+                             "Camera tilt relative to the forearm. 90 = in "
+                             "line. ABOVE 90 tilts your view DOWN, toward the "
+                             "user. BELOW 90 tilts it UP and away."
+                         )},
             "wrist_r":  {"type": "integer", "minimum": 0,  "maximum": 180,
                          "description": (
                              "Wrist roll (camera spin around the gripper's "

@@ -108,7 +108,7 @@ _MM_PER_CM = 10.0
 # practice. (Under an along-the-axis mount they would look at the ceiling and
 # base rotation would merely spin the image — which is not what the arm does.)
 #
-# Fixed point 3 — `look_at_hands` (shoulder 75, elbow 80, wrist_v 70) finds
+# Fixed point 3 — `look_at_hands` (shoulder 75, elbow 100, wrist_v 110) finds
 # the user's hands at chest height. Under this model its ray leaves the lens
 # at (y=6.9cm, z=37.1cm) angled 25 degrees down and passes through
 # (y=35cm, z=24cm) — within a centimetre of the "hands = (0, 35, 25)" anchor
@@ -240,39 +240,45 @@ def chain_to_shoulder_servo(rad: float) -> float:
     return math.degrees(rad)
 
 
-# Sign of the elbow servo's contribution to forearm elevation.
+# Signs of the elbow and wrist_v servos' contributions to elevation.
 #
-# The shoulder (M2) and elbow (M3) servos are mounted facing opposite ways on
-# the Braccio linkage, so raising the elbow servo number lowers the forearm
-# relative to the upper arm: servo 180 swings the forearm DOWN and OUT (away
-# from the shoulder, toward the front of the desk), servo 0 folds it UP and
-# BACK over the shoulder. Hence -1.
+# BOTH come straight off the hardware ground-truth run of
+# tests/test_direction_calibration.py (2026-08-30), which drove raw servo
+# values with no model in the loop while the user watched from their normal
+# seat facing the arm. These observations outrank every derivation:
 #
-# Evidence (all three fail at +1 and pass at -1):
-#   * `look_down` (130/140/40) — at -1 the lens ends up 32cm above the base
-#     looking 60 degrees down, centred on the desk 18cm in front of the arm,
-#     which is what the preset's name and behaviour say. At +1 it points 40
-#     degrees UP from a lens parked 24cm BEHIND the base, and its optical
-#     direction comes out identical to `look_up`.
-#   * `look_at_hands` (75/80/70) — at -1 the ray passes through
-#     (y=35cm, z=24cm), matching the published hands anchor (0, 35, 25) to
-#     about a centimetre. At +1 it passes 12cm below it.
-#   * Braccio stock poses — the library's safety position (M2 40, M3 180,
-#     M4 170) is a low, stable crouch with the gripper near the desk in
-#     front of the base at -1, and a tall folded-back pose with the wrist
-#     25cm in the air at +1. Likewise the common "reach for something on the
-#     table" demo values (M2 ~45, M3 180) only reach forward-and-down at -1.
+#   * elbow 140 -> the forearm folds UP and BACK over the base.
+#     elbow 40  -> it swings DOWN and TOWARD the user.
+#     So raising the servo RAISES the forearm relative to the upper arm:
+#     elbow_rel = +(servo - 90). From `home` (all 90, upper arm straight up
+#     at elevation +90), elbow 140 gives forearm elevation 140 — past
+#     vertical, back over the base — which is exactly what was observed.
+#     Hence +1.
 #
-# If hardware calibration disagrees, flip this constant and nothing else.
-ELBOW_SIGN = -1.0
+#   * wrist_v 140 -> the gripper/camera tips TOWARD the user and DOWN.
+#     wrist_v 40  -> it tips AWAY and UP.
+#     So raising the servo LOWERS the gripper axis:
+#     wrist_rel = -(servo - 90). From `home`, wrist_v 140 puts the gripper
+#     axis at elevation 90 - 50 = 40, i.e. the camera (gripper elevation
+#     minus 90) at -50: fifty degrees below horizontal, pointing at the
+#     user. Hence -1. The camera+gripper assembly is mounted upside down,
+#     which is the physical reason this runs opposite to the elbow.
+#
+# An earlier revision of this file had both of these inverted, derived from
+# the Braccio library's stock demo poses rather than from the arm. The arm
+# wins. If a future calibration disagrees, flip the relevant constant here
+# and nothing else — every other use is expressed through the four
+# conversion functions below.
+ELBOW_SIGN = 1.0
+WRIST_V_SIGN = -1.0
 
 
 def elbow_servo_to_chain(deg: float) -> float:
     """elbow servo -> forearm elevation RELATIVE to the upper arm.
 
     Derivation: servo 90 = forearm inline with the upper arm = relative 0.
-    Servo 180 = swung out and down = relative -90 (see ELBOW_SIGN above).
-    Servo 0 is the mirror image: folded back and up over the shoulder.
+    Servo 140 = folded up and back over the base = relative +50 (see
+    ELBOW_SIGN above). Servo 40 = swung down and out toward the user = -50.
     """
     return math.radians(ELBOW_SIGN * (deg - 90.0))
 
@@ -285,14 +291,15 @@ def wrist_v_servo_to_chain(deg: float) -> float:
     """wrist_v servo -> gripper axis elevation RELATIVE to the forearm.
 
     Derivation: servo 90 = gripper inline with the forearm = relative 0.
-    Below 90 tilts the gripper — and therefore the camera bolted to it —
-    down, i.e. decreases elevation. relative_deg == servo_deg - 90.
+    Servo 140 tips the gripper — and therefore the camera bolted upside down
+    to it — TOWARD the user and DOWN, i.e. decreases elevation, so
+    relative_deg == -(servo_deg - 90). Servo 40 tips it away and up.
     """
-    return math.radians(deg - 90.0)
+    return math.radians(WRIST_V_SIGN * (deg - 90.0))
 
 
 def chain_to_wrist_v_servo(rad: float) -> float:
-    return math.degrees(rad) + 90.0
+    return 90.0 + math.degrees(rad) / WRIST_V_SIGN
 
 
 # CALIBRATION NOTE — read before chasing a look_at that aims wrong.
@@ -308,8 +315,12 @@ def chain_to_wrist_v_servo(rad: float) -> float:
 #     the camera points lower than modelled, so DECREASE the constant).
 #   * Aiming error grows with how far the arm is from `home`, and the arm
 #     folds the wrong way (reaching back when it should reach out) -> a sign
-#     error, i.e. ELBOW_SIGN, or the shoulder/wrist_v conventions. Signs fail
-#     loudly and geometrically; they never look "a bit off".
+#     error, i.e. ELBOW_SIGN / WRIST_V_SIGN, or the shoulder convention.
+#     Signs fail loudly and geometrically; they never look "a bit off".
+#     This HAPPENED (2026-08-30): both pitch signs were inverted, derived
+#     from the Braccio library's stock demo poses. The hardware run of
+#     tests/test_direction_calibration.py settled them; see the block above
+#     ELBOW_SIGN for the observations.
 #   * Aiming is directionally right but consistently overshoots or
 #     undershoots, worse for distant targets and better for near ones ->
 #     link lengths. Measure BASE_HEIGHT/UPPER_ARM/FOREARM/CAMERA_OFFSET with
@@ -331,8 +342,8 @@ def chain_to_wrist_v_servo(rad: float) -> float:
 #                                                      (= the user's LEFT,
 #                                                       i.e. base servo 180)
 #   shoulder  15..165       radians(servo)             upper arm horizontal
-#   elbow     0..180        radians(90 - servo)        forearm inline
-#   wrist_v   0..180        radians(servo - 90)        gripper inline
+#   elbow     0..180        radians(servo - 90)        forearm inline
+#   wrist_v   0..180        radians(90 - servo)        gripper inline
 #   wrist_r   0..180        (not in the chain)         camera roll only
 #   gripper   10..73        (not in the chain)         no effect on aim
 
@@ -424,7 +435,8 @@ def braccio_chain() -> Chain:
         lo, hi = getattr(LIMITS, name)
         a = _SERVO_TO_CHAIN[name](lo)
         b = _SERVO_TO_CHAIN[name](hi)
-        # ELBOW_SIGN can invert the servo->chain ordering; ikpy wants (min, max).
+        # A negative sign constant inverts the servo->chain ordering (wrist_v
+        # does exactly that); ikpy wants (min, max).
         return (min(a, b), max(a, b))
 
     links = [

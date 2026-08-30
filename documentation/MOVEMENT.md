@@ -77,16 +77,23 @@ horizontally at the room, not at the ceiling.
   90 leans toward the user. Above 90 leans back away from them.
 
 - **`elbow`** (0–180°). Bends the forearm. 90 = straight, in line with
-  the upper arm. ABOVE 90 swings the forearm DOWN and OUT toward the
-  user — use this to get low over the desk. BELOW 90 folds the forearm
-  UP and BACK over your base.
+  the upper arm. ABOVE 90 folds the forearm UP and BACK over your base.
+  BELOW 90 swings it DOWN and OUT toward the user — use this to get low
+  over the desk.
 
 - **`wrist_v`** (0–180°). Tilts your view. 90 = in line with the
-  forearm. Below 90 tilts the view DOWN. Above 90 tilts UP. Your
-  fine-angle adjustment — use it before moving bigger joints.
+  forearm. Above 90 tilts the view DOWN, toward the user. Below 90
+  tilts UP and away. Your fine-angle adjustment — use it before moving
+  bigger joints.
 
 - **`wrist_r`** (0–180°). Wrist roll. 90 = baseline. See the spin
   section below.
+
+All three pitch directions above were verified on the hardware
+(2026-08-30) by driving raw servo values with the user watching. The
+camera and gripper are mounted upside down, which is why `wrist_v`
+runs opposite to `elbow`: raising `elbow` lifts the forearm, raising
+`wrist_v` drops your view.
 
 ## Reading the image to refine
 
@@ -97,10 +104,11 @@ user's left, which is exactly where image-right is.
 
 - Subject on the IMAGE'S RIGHT → INCREASE `base`.
 - Subject on the IMAGE'S LEFT → DECREASE `base`.
-- Subject at the IMAGE'S BOTTOM → tilt down: DECREASE `wrist_v`.
-- Subject at the IMAGE'S TOP → tilt up: INCREASE `wrist_v`.
+- Subject at the IMAGE'S BOTTOM → tilt down: INCREASE `wrist_v`.
+- Subject at the IMAGE'S TOP → tilt up: DECREASE `wrist_v`.
 - Centered but small/far → call look_at on its location again, or lean
-  `shoulder` toward it 10–20° and re-tilt `wrist_v` to recompose.
+  `shoulder` toward it 10–20° (lower numbers lean toward the user) and
+  re-tilt `wrist_v` to recompose.
 - Centered and clear → don't move. Answer.
 
 Rule of thumb: pan toward the side of the image the subject is
