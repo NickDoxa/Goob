@@ -11,7 +11,12 @@ dist/
 # Local-only context (kept out of public repo)
 CLAUDE.md
 .claude/
-documentation/
+# documentation/ is ignored EXCEPT the two prompt files Goob is built on.
+# LESSONS.md (bot-written memory) and .backups/ are device-local state and
+# must never sync between machines.
+documentation/*
+!documentation/GOOB.md
+!documentation/MOVEMENT.md
 
 # IDE
 .vscode/
