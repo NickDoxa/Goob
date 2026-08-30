@@ -75,4 +75,15 @@ SESSION_IDLE_S: float = float(_session_idle) if _session_idle else 300.0
 _session_imgs = os.getenv("SESSION_MAX_IMAGES", "3")
 SESSION_MAX_IMAGES: int = int(_session_imgs) if _session_imgs else 3
 
+# --- Google Calendar (optional, read-only) ---
+# Adds a `get_calendar_events` tool. Off by default: deps live in the
+# `calendar` extra (pip install -e .[calendar]) and OAuth is a one-time
+# setup on your PC via tools/get_google_token.py — see that script's
+# docstring. The bot only ever refreshes the saved token, never runs the
+# interactive consent flow.
+CALENDAR_ENABLED: bool = os.getenv("CALENDAR_ENABLED", "false").lower() == "true"
+# Path to the saved token (from tools/get_google_token.py), resolved
+# against the repo root if relative.
+GOOGLE_TOKEN_PATH: str = os.getenv("GOOGLE_TOKEN_PATH", "google_token.json")
+
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

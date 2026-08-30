@@ -28,7 +28,7 @@ from typing import Optional
 
 import discord
 
-from src import config, memory
+from src import config, gcal, memory
 from src.arm import ArmController
 from src.camera import Camera
 from src.kinematics import solve_look_at
@@ -189,6 +189,9 @@ class GoobClient(discord.Client):
             }
         return "proposal registered — awaiting user approval (reply 'yes' or 'apply it')"
 
+    def _get_calendar_events(self, time_min_iso: str, time_max_iso: str, max_results: int) -> list[dict]:
+        return gcal.get_events(time_min_iso, time_max_iso, max_results)
+
     async def _run_turn(self, user_text: str) -> TurnResult:
         prior = self._take_prior()
         turn_started = time.monotonic()
@@ -200,6 +203,7 @@ class GoobClient(discord.Client):
             self.arm.move_to_pose,
             self._look_at,
             self._propose_edit,
+            self._get_calendar_events,
             prior,
         )
         # A proposal is only live until the next message: anything pending

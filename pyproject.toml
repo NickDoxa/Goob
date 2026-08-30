@@ -31,6 +31,14 @@ voice = [
     "webrtcvad-wheels>=2.0.14",
     "faster-whisper>=1.0",
 ]
+# Google Calendar read access (src/gcal.py). Install with
+# `pip install -e .[calendar]`. OAuth happens once on your PC via
+# tools/get_google_token.py — see that script's docstring.
+calendar = [
+    "google-api-python-client>=2.100",
+    "google-auth-oauthlib>=1.0",
+    "google-auth>=2.20",
+]
 
 [build-system]
 requires = ["setuptools>=68"]

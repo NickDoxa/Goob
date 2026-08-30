@@ -1,8 +1,8 @@
 """Claude vision + agentic tool loop.
 
 Each Discord (or voice) turn calls `ask_claude(text, capture, move,
-go_to_pose, look_at, propose_edit)`. The function runs an agentic loop with
-seven client-side tools:
+go_to_pose, look_at, propose_edit, get_events)`. The function runs an
+agentic loop with eight client-side tools:
 
 - `look` — capture a fresh photo without moving.
 - `go_to_pose` — snap to a named preset (home, look_at_hands, look_down,
@@ -16,6 +16,8 @@ seven client-side tools:
   src.memory. No photo, no move_count.
 - `propose_doc_edit` — register a pending edit to GOOB.md/MOVEMENT.md for
   the user to approve; the caller (bot.py) owns approval state.
+- `get_calendar_events` — read-only Google Calendar lookup (enabled by
+  config.CALENDAR_ENABLED). No photo, no move_count.
 
 Plus one server-side tool (enabled by config.WEB_SEARCH_ENABLED):
 
@@ -48,6 +50,7 @@ from __future__ import annotations
 import base64
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -294,11 +297,46 @@ PROPOSE_DOC_EDIT_TOOL = {
 }
 
 
+GET_CALENDAR_TOOL = {
+    "name": "get_calendar_events",
+    "description": (
+        "Read the user's Google Calendar for upcoming events. Use when "
+        "asked about their schedule, meetings, plans, or availability "
+        "(\"what's on my calendar today?\", \"any meetings tomorrow?\", "
+        "\"am I free this afternoon?\"). Do NOT call this for anything "
+        "else. days_ahead=0 means today only, 1 means today+tomorrow, "
+        "and so on."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "days_ahead": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 30,
+                "default": 1,
+                "description": "0 = today only, 1 = today+tomorrow, etc.",
+            },
+            "max_results": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20,
+                "default": 10,
+                "description": "Max number of events to return.",
+            },
+        },
+        "required": [],
+    },
+}
+
+
 def _build_tools() -> list[dict]:
     tools: list[dict] = [
         LOOK_TOOL, GO_TO_POSE_TOOL, LOOK_AT_TOOL, MOVE_ARM_TOOL,
         REMEMBER_TOOL, FORGET_TOOL, PROPOSE_DOC_EDIT_TOOL,
     ]
+    if config.CALENDAR_ENABLED:
+        tools.append(GET_CALENDAR_TOOL)
     if config.WEB_SEARCH_ENABLED:
         # Anthropic server-side tool. Executed inside messages.create; we
         # never see a client tool_use for it. max_uses caps searches per
@@ -443,6 +481,19 @@ def _mark_moving_breakpoint(messages: list[dict]) -> None:
         block["cache_control"] = {"type": "ephemeral"}
 
 
+def _format_calendar_events(events: list[dict]) -> str:
+    if not events:
+        return "no events in that window"
+    lines = []
+    for ev in events:
+        when = f"{ev['start']} (all day)" if ev["all_day"] else f"{ev['start']} - {ev['end']}"
+        line = f"{when} — {ev['summary']}"
+        if ev.get("location"):
+            line += f" ({ev['location']})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def ask_claude(
     user_text: str,
     capture: Callable[[], bytes],
@@ -450,6 +501,7 @@ def ask_claude(
     go_to_pose: Callable[[str], None],
     look_at: Callable[[float, float, float], None],
     propose_edit: Callable[[str, str, str, str], str],
+    get_events: Callable[[str, str, int], list[dict]],
     prior_messages: Optional[list[dict]] = None,
     max_turns: int = 12,
 ) -> TurnResult:
@@ -703,6 +755,30 @@ def ask_claude(
                     "type": "tool_result",
                     "tool_use_id": block.id,
                     "content": result_text,
+                })
+            elif block.name == "get_calendar_events":
+                args = dict(block.input)
+                try:
+                    # Casts stay inside the try: tool inputs are model-
+                    # generated and only best-effort schema-conformant.
+                    days_ahead = int(args.get("days_ahead", 1))
+                    max_results = int(args.get("max_results", 10))
+                    now = datetime.now().astimezone()
+                    time_min = now
+                    time_max = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=days_ahead + 1)
+                    events = get_events(time_min.isoformat(), time_max.isoformat(), max_results)
+                except Exception as exc:
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": str(exc),
+                        "is_error": True,
+                    })
+                    continue
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": _format_calendar_events(events),
                 })
             else:
                 tool_results.append({

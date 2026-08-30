@@ -131,3 +131,50 @@ separate project; the hooks are in place if you ever want to swap one in.
 When voice is on, `python -m src.main` starts the listener alongside the
 Discord client. Spoken queries reply in DM, prefixed with `_(voice)_` so you
 can tell which channel a turn came from.
+
+## Google Calendar (optional)
+
+Read-only access to your Google Calendar via a `get_calendar_events` tool
+("what's on my schedule today?", "any meetings tomorrow?"). Plain
+client-side calls to Google's API — no MCP server.
+
+1. Google Cloud console setup (once):
+   - https://console.cloud.google.com/ -> select or create a project.
+   - APIs & Services -> Library -> enable "Google Calendar API".
+   - APIs & Services -> OAuth consent screen -> User type "External" ->
+     fill in the required fields -> add yourself under "Test users".
+   - APIs & Services -> Credentials -> Create Credentials -> OAuth client
+     ID -> Application type "Desktop app" -> download the JSON.
+
+2. On your PC (NOT the Uno Q — this step needs a browser for the OAuth
+   consent screen):
+
+   ```bash
+   pip install google-auth-oauthlib
+   python tools/get_google_token.py path/to/client_secret.json
+   ```
+
+   This opens a browser, walks you through consent, and writes
+   `google_token.json`.
+
+3. Copy the token to the device and lock it down:
+
+   ```bash
+   scp google_token.json arduino@<uno-q-host>:/home/arduino/Goob/google_token.json
+   ssh arduino@<uno-q-host> chmod 600 /home/arduino/Goob/google_token.json
+   ```
+
+4. On the device, install the extra and flip on the flag in `.env`:
+
+   ```bash
+   pip install -e .[calendar]
+   ```
+
+   ```
+   CALENDAR_ENABLED=true
+   GOOGLE_TOKEN_PATH=google_token.json
+   ```
+
+The bot only ever refreshes the saved token — the interactive consent flow
+never runs on the Uno Q. If the token is revoked or expires, re-run
+`tools/get_google_token.py` on your PC and re-copy it.

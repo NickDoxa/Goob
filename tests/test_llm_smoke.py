@@ -36,11 +36,16 @@ def _mock_propose_edit(file: str, find: str, replace: str, reason: str) -> str:
     return "proposal registered — awaiting user approval (reply 'yes' or 'apply it')"
 
 
+def _mock_get_events(time_min_iso: str, time_max_iso: str, max_results: int) -> list[dict]:
+    print(f"  [mock get_events] {time_min_iso} .. {time_max_iso} (max {max_results})")
+    return []
+
+
 def _run(prompt: str, cam: Camera) -> None:
     print(f"\n>>> {prompt}")
     result = ask_claude(
         prompt, cam.capture_jpeg, _mock_move, _mock_pose, _mock_look_at,
-        _mock_propose_edit,
+        _mock_propose_edit, _mock_get_events,
     )
     print(f"text: {result.text}")
     print(

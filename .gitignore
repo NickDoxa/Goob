@@ -4,6 +4,10 @@ __pycache__/
 .venv/
 venv/
 .env
+# Google OAuth credentials — both land in the repo root during calendar
+# setup and must never be committed.
+google_token.json
+client_secret*.json
 .pytest_cache/
 build/
 dist/
