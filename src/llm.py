@@ -1,8 +1,8 @@
 """Claude vision + agentic tool loop.
 
 Each Discord (or voice) turn calls `ask_claude(text, capture, move,
-go_to_pose, look_at)`. The function runs an agentic loop with four
-client-side tools:
+go_to_pose, look_at, propose_edit)`. The function runs an agentic loop with
+seven client-side tools:
 
 - `look` — capture a fresh photo without moving.
 - `go_to_pose` — snap to a named preset (home, look_at_hands, look_down,
@@ -12,6 +12,10 @@ client-side tools:
   src.kinematics; Claude gives a location, not angles.
 - `move_arm` — fine-grained joint control. Used to refine after a preset,
   or for poses that don't match a named preset.
+- `remember` / `forget` — read/write documentation/LESSONS.md via
+  src.memory. No photo, no move_count.
+- `propose_doc_edit` — register a pending edit to GOOB.md/MOVEMENT.md for
+  the user to approve; the caller (bot.py) owns approval state.
 
 Plus one server-side tool (enabled by config.WEB_SEARCH_ENABLED):
 
@@ -34,7 +38,10 @@ or `max_turns` is hit.
   never benefits from slowing down deliberately.
 
 Personality lives in `documentation/GOOB.md`; arm kinematics live in
-`documentation/MOVEMENT.md`. Both load at module import.
+`documentation/MOVEMENT.md`; bot-writable memory lives in
+`documentation/LESSONS.md`. `get_system_blocks()` re-reads all three
+whenever any of their mtimes change, so edits take effect next turn without
+a process restart.
 """
 from __future__ import annotations
 
@@ -46,7 +53,7 @@ from typing import Callable, Optional
 
 import anthropic
 
-from src import config
+from src import config, memory
 from src.arm import POSES
 
 logger = logging.getLogger(__name__)
@@ -181,8 +188,93 @@ LOOK_AT_TOOL = {
 }
 
 
+REMEMBER_TOOL = {
+    "name": "remember",
+    "description": (
+        "Save a permanent memory to documentation/LESSONS.md. Use this when "
+        "the user corrects your behavior (kind=lesson, e.g. \"when the user "
+        "says X, do Y\") or you learn a stable fact about the room or user "
+        "(kind=fact, e.g. room layout, habits, environment quirks). Keep "
+        "entries short and general; don't save session trivia or duplicates "
+        "of existing memories (your current memories are in your system "
+        "prompt under \"Goob memory\")."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["lesson", "fact"],
+                "description": "lesson = behavioral correction. fact = stable world fact.",
+            },
+            "text": {
+                "type": "string",
+                "description": "The memory to save. Single line, <=200 chars.",
+            },
+        },
+        "required": ["kind", "text"],
+    },
+}
+
+FORGET_TOOL = {
+    "name": "forget",
+    "description": (
+        "Remove an outdated or wrong memory entry from documentation/"
+        "LESSONS.md. Provide a substring that uniquely identifies the entry "
+        "to remove."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "match": {
+                "type": "string",
+                "description": "Substring (case-insensitive) identifying the memory entry to remove.",
+            },
+        },
+        "required": ["match"],
+    },
+}
+
+PROPOSE_DOC_EDIT_TOOL = {
+    "name": "propose_doc_edit",
+    "description": (
+        "Propose a correction to your own instruction files (GOOB.md or "
+        "MOVEMENT.md). This does NOT apply immediately — it registers a "
+        "pending proposal. You MUST include the find/replace text and your "
+        "reason in your reply so the user can review and approve it by "
+        "replying \"yes\" or \"apply it\" within 10 minutes."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "file": {
+                "type": "string",
+                "enum": ["GOOB.md", "MOVEMENT.md"],
+                "description": "Which doc to edit.",
+            },
+            "find": {
+                "type": "string",
+                "description": "Exact text to find. Must occur exactly once in the file.",
+            },
+            "replace": {
+                "type": "string",
+                "description": "Text to replace it with.",
+            },
+            "reason": {
+                "type": "string",
+                "description": "Why this edit is needed.",
+            },
+        },
+        "required": ["file", "find", "replace", "reason"],
+    },
+}
+
+
 def _build_tools() -> list[dict]:
-    tools: list[dict] = [LOOK_TOOL, GO_TO_POSE_TOOL, LOOK_AT_TOOL, MOVE_ARM_TOOL]
+    tools: list[dict] = [
+        LOOK_TOOL, GO_TO_POSE_TOOL, LOOK_AT_TOOL, MOVE_ARM_TOOL,
+        REMEMBER_TOOL, FORGET_TOOL, PROPOSE_DOC_EDIT_TOOL,
+    ]
     if config.WEB_SEARCH_ENABLED:
         # Anthropic server-side tool. Executed inside messages.create; we
         # never see a client tool_use for it. max_uses caps searches per
@@ -220,27 +312,55 @@ class TurnResult:
 
 
 _DOCS = Path(__file__).resolve().parent.parent / "documentation"
+_GOOB_PATH = _DOCS / "GOOB.md"
+_MOVEMENT_PATH = _DOCS / "MOVEMENT.md"
+_LESSONS_PATH = _DOCS / "LESSONS.md"
+
+_system_cache_key: Optional[tuple] = None
+_system_cache_blocks: Optional[list[dict]] = None
+
+
+def _doc_stat_key(path: Path) -> tuple:
+    try:
+        return (True, path.stat().st_mtime_ns)
+    except FileNotFoundError:
+        return (False, 0)
 
 
 def _load_system_prompt() -> str:
-    # GOOB.md is required (personality + behavior). MOVEMENT.md is optional;
-    # if present it appends a Braccio kinematics guide so Claude knows how
-    # the joints combine, not just what each one does in isolation.
-    parts = [(_DOCS / "GOOB.md").read_text(encoding="utf-8")]
-    movement = _DOCS / "MOVEMENT.md"
-    if movement.exists():
-        parts.append(movement.read_text(encoding="utf-8"))
+    # GOOB.md is required (personality + behavior). MOVEMENT.md and
+    # LESSONS.md are optional; if present they append a Braccio kinematics
+    # guide and bot-writable memory respectively, in that order, so Claude
+    # knows how the joints combine and what it has already learned.
+    parts = [_GOOB_PATH.read_text(encoding="utf-8")]
+    for path in (_MOVEMENT_PATH, _LESSONS_PATH):
+        if path.exists():
+            parts.append(path.read_text(encoding="utf-8"))
     return "\n\n---\n\n".join(parts)
 
 
-SYSTEM_PROMPT = _load_system_prompt()
-SYSTEM_BLOCKS = [
-    {
-        "type": "text",
-        "text": SYSTEM_PROMPT,
-        "cache_control": {"type": "ephemeral", "ttl": "1h"},
-    }
-]
+def get_system_blocks() -> list[dict]:
+    # mtime-cached: memory writes and applied doc-edit proposals should take
+    # effect on the very next turn without a process restart, but a turn
+    # that doesn't touch any doc shouldn't pay for a re-read + fresh 1h
+    # cache-write on every single call.
+    global _system_cache_key, _system_cache_blocks
+    key = (
+        _doc_stat_key(_GOOB_PATH),
+        _doc_stat_key(_MOVEMENT_PATH),
+        _doc_stat_key(_LESSONS_PATH),
+    )
+    if key != _system_cache_key or _system_cache_blocks is None:
+        _system_cache_blocks = [
+            {
+                "type": "text",
+                "text": _load_system_prompt(),
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ]
+        _system_cache_key = key
+    return _system_cache_blocks
+
 
 _client: Optional[anthropic.Anthropic] = None
 
@@ -305,6 +425,7 @@ def ask_claude(
     move: Callable[..., None],
     go_to_pose: Callable[[str], None],
     look_at: Callable[[float, float, float], None],
+    propose_edit: Callable[[str, str, str, str], str],
     prior_messages: Optional[list[dict]] = None,
     max_turns: int = 12,
 ) -> TurnResult:
@@ -316,6 +437,7 @@ def ask_claude(
     # session. Pass None (or []) for a fresh conversation. Caller is
     # responsible for image-trimming and idle-expiry.
     client = _get_client()
+    system_blocks = get_system_blocks()  # one snapshot per turn, not per round
     messages: list[dict] = list(prior_messages) if prior_messages else []
     messages.append({"role": "user", "content": user_text or "(no text)"})
     move_count = 0
@@ -330,7 +452,7 @@ def ask_claude(
         response = client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=1024,
-            system=SYSTEM_BLOCKS,
+            system=system_blocks,
             tools=TOOLS,
             messages=messages,
         )
@@ -501,6 +623,62 @@ def ask_claude(
                         {"type": "text", "text": f"moved to {pose_name}; here is the new view:"},
                         _image_block(last_jpeg),
                     ],
+                })
+            elif block.name == "remember":
+                args = dict(block.input)
+                try:
+                    result_text = memory.remember(args.get("kind", ""), args.get("text", ""))
+                except Exception as exc:
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": str(exc),
+                        "is_error": True,
+                    })
+                    continue
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result_text,
+                })
+            elif block.name == "forget":
+                args = dict(block.input)
+                try:
+                    result_text = memory.forget(args.get("match", ""))
+                except Exception as exc:
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": str(exc),
+                        "is_error": True,
+                    })
+                    continue
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result_text,
+                })
+            elif block.name == "propose_doc_edit":
+                args = dict(block.input)
+                try:
+                    result_text = propose_edit(
+                        args.get("file", ""),
+                        args.get("find", ""),
+                        args.get("replace", ""),
+                        args.get("reason", ""),
+                    )
+                except Exception as exc:
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": str(exc),
+                        "is_error": True,
+                    })
+                    continue
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result_text,
                 })
             else:
                 tool_results.append({

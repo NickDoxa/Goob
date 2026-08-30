@@ -10,6 +10,11 @@ follow-up like "wrong wall, look at the other one" works. After an idle
 timeout (config.SESSION_IDLE_S), history clears. Old images get replaced
 with placeholders past config.SESSION_MAX_IMAGES to bound vision tokens.
 Voice and Discord share the same history.
+
+Doc-edit proposals: Claude's propose_doc_edit tool registers a pending
+GOOB.md/MOVEMENT.md edit here (not applied yet). A Discord-text "yes" /
+"apply it" within 10 minutes applies it via src.memory. Voice replies never
+trigger approval — that's Discord-text only.
 """
 from __future__ import annotations
 
@@ -23,13 +28,16 @@ from typing import Optional
 
 import discord
 
-from src import config
+from src import config, memory
 from src.arm import ArmController
 from src.camera import Camera
 from src.kinematics import solve_look_at
 from src.llm import TurnResult, ask_claude
 
 logger = logging.getLogger(__name__)
+
+_PROPOSAL_TIMEOUT_S = 600.0
+_APPROVAL_PHRASES = {"yes", "apply", "apply it", "approve", "approved"}
 
 
 def _trim_old_images(messages: list[dict], keep_last_n: int) -> list[dict]:
@@ -113,6 +121,10 @@ class GoobClient(discord.Client):
         self._history: list[dict] = []
         self._history_at: float = 0.0
         self._history_lock = threading.Lock()
+        # Pending propose_doc_edit awaiting Discord-text "yes"/"apply it".
+        # Can be set from the voice thread too (ask_claude runs there), so
+        # it shares the history lock rather than getting its own.
+        self._pending_proposal: Optional[dict] = None
 
     def _take_prior(self) -> list[dict]:
         """Return the trimmed prior transcript, or [] if expired/empty."""
@@ -162,8 +174,24 @@ class GoobClient(discord.Client):
         # without breaking image-axis reasoning on subsequent looks.
         return self.camera.capture_jpeg(self.arm.current_wrist_r)
 
+    def _propose_edit(self, file: str, find: str, replace: str, reason: str) -> str:
+        # Dry-run validates the find string occurs exactly once before we
+        # ever store the proposal, so a bad proposal fails loudly to Claude
+        # instead of silently waiting for an approval that can't apply.
+        memory.check_doc_edit(file, find)
+        with self._history_lock:
+            self._pending_proposal = {
+                "file": file,
+                "find": find,
+                "replace": replace,
+                "reason": reason,
+                "at": time.monotonic(),
+            }
+        return "proposal registered — awaiting user approval (reply 'yes' or 'apply it')"
+
     async def _run_turn(self, user_text: str) -> TurnResult:
         prior = self._take_prior()
+        turn_started = time.monotonic()
         result = await asyncio.to_thread(
             ask_claude,
             user_text,
@@ -171,12 +199,36 @@ class GoobClient(discord.Client):
             self.arm.move,
             self.arm.move_to_pose,
             self._look_at,
+            self._propose_edit,
             prior,
         )
+        # A proposal is only live until the next message: anything pending
+        # from before this turn is stale — clear it so a later "yes" meant
+        # for something else can't apply an edit the user no longer has in
+        # front of them.
+        with self._history_lock:
+            if (
+                self._pending_proposal is not None
+                and self._pending_proposal["at"] < turn_started
+            ):
+                self._pending_proposal = None
         # _trim_to_complete is a no-op on clean completions and salvages
         # the prefix on max-turns truncations.
         self._commit_history(_trim_to_complete(result.messages))
         return result
+
+    def _proposal_suffix(self) -> str:
+        # The user must see exactly what they'd be approving — Claude
+        # restating it in prose is a hope, not a mechanism.
+        with self._history_lock:
+            p = self._pending_proposal
+        if p is None:
+            return ""
+        return (
+            f"\n\n_(pending edit to {p['file']} — reply \"apply it\" to approve)_\n"
+            f"> {p['reason'][:200]}\n"
+            f"```diff\n- {p['find'][:300]}\n+ {p['replace'][:300]}\n```"
+        )
 
     def _format_suffix(self, result: TurnResult) -> str:
         suffix = ""
@@ -197,6 +249,42 @@ class GoobClient(discord.Client):
             return []
         return [discord.File(io.BytesIO(jpeg), filename="frame.jpg")]
 
+    async def _maybe_apply_proposal(self, message: discord.Message) -> bool:
+        """Handle a Discord-text approval reply. Returns True if handled."""
+        text = message.content.strip().lower()
+        with self._history_lock:
+            pending = self._pending_proposal
+            if pending is not None and time.monotonic() - pending["at"] > _PROPOSAL_TIMEOUT_S:
+                logger.info("pending proposal expired, clearing")
+                self._pending_proposal = None
+                pending = None
+
+            if pending is None or text not in _APPROVAL_PHRASES:
+                return False
+            self._pending_proposal = None
+        try:
+            result_text = memory.apply_doc_edit(
+                pending["file"], pending["find"], pending["replace"]
+            )
+        except Exception as exc:
+            logger.exception("proposal apply failed")
+            await message.reply(f"couldn't apply proposal: {exc}"[:1500])
+            return True
+        # The edit is already on disk here — the confirmation must survive
+        # even if the full text (which embeds find/replace) trips Discord's
+        # 2000-char limit.
+        try:
+            await message.reply(
+                f"{result_text[:1400]} — applied — takes effect next turn"
+            )
+        except Exception:
+            logger.exception("edit applied but full confirmation failed")
+            try:
+                await message.reply("edit applied — takes effect next turn")
+            except Exception:
+                logger.exception("could not deliver apply confirmation at all")
+        return True
+
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
@@ -207,6 +295,9 @@ class GoobClient(discord.Client):
 
         logger.info("dm from %d, %d chars", message.author.id, len(message.content))
 
+        if await self._maybe_apply_proposal(message):
+            return
+
         async with message.channel.typing():
             try:
                 result = await self._run_turn(message.content)
@@ -216,7 +307,7 @@ class GoobClient(discord.Client):
                 return
             text = result.text or "(no response)"
             await message.reply(
-                text + self._format_suffix(result),
+                (text + self._format_suffix(result) + self._proposal_suffix())[:1990],
                 files=self._attached(result.last_jpeg),
             )
 
@@ -240,6 +331,6 @@ class GoobClient(discord.Client):
                 return
             text = result.text or "(no response)"
             await channel.send(
-                text + self._format_suffix(result),
+                (text + self._format_suffix(result) + self._proposal_suffix())[:1990],
                 files=self._attached(result.last_jpeg),
             )

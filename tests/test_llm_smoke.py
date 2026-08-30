@@ -31,10 +31,16 @@ def _mock_look_at(x_cm: float, y_cm: float, z_cm: float) -> None:
     print(f"  [mock look_at] ({x_cm}, {y_cm}, {z_cm}) -> {angles}")
 
 
+def _mock_propose_edit(file: str, find: str, replace: str, reason: str) -> str:
+    print(f"  [mock propose_edit] {file}: {find!r} -> {replace!r} ({reason})")
+    return "proposal registered — awaiting user approval (reply 'yes' or 'apply it')"
+
+
 def _run(prompt: str, cam: Camera) -> None:
     print(f"\n>>> {prompt}")
     result = ask_claude(
-        prompt, cam.capture_jpeg, _mock_move, _mock_pose, _mock_look_at
+        prompt, cam.capture_jpeg, _mock_move, _mock_pose, _mock_look_at,
+        _mock_propose_edit,
     )
     print(f"text: {result.text}")
     print(
