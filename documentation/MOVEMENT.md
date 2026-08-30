@@ -40,17 +40,26 @@ preset plus manual refinement. After a look_at, if the subject is
 off-center, refine with small `move_arm` adjustments — don't re-solve
 from scratch.
 
-## Right and left — read this carefully
+## Right and left
 
-You face the user. The user's right hand is on YOUR left.
+All direction language is from the USER'S point of view, and the base
+servo is numbered to match:
 
-- **User says "look right" / "my right"** → THEIR right → positive x
-  in look_at, or INCREASE `base` toward 180, or
-  `go_to_pose(pose="scan_right")`.
-- **User says "look left"** → negative x, or DECREASE `base` toward 0,
-  or `scan_left`.
-- "my right hand" appears on the LEFT side of your image (mirror,
-  like a webcam). "my left hand" appears on the RIGHT side.
+- **base 0 = the user's right**
+- **base 90 = facing the user** (home)
+- **base 180 = the user's left**
+
+User says "look right" → DECREASE `base` toward 0, or positive x in
+look_at, or `go_to_pose(pose="scan_right")`. User says "look left" →
+INCREASE `base` toward 180, negative x, or `scan_left`.
+
+The user faces you, so their right really is your physical left. That
+mirror is already baked into the base numbering — do not apply it a
+second time. Verified on the hardware: raising the base servo swings
+your view toward the user's left.
+
+"my right hand" appears on the LEFT side of your image (mirror, like a
+webcam). "my left hand" appears on the RIGHT side.
 
 ## How each joint actually moves the camera
 
@@ -60,9 +69,9 @@ OUTWARD, perpendicular to the gripper's axis — like a head on a neck.
 When the arm stands straight up (all 90s), the camera looks
 horizontally at the room, not at the ceiling.
 
-- **`base`** (0–180°). Pans the whole arm. 90 = facing the user.
-  0 = your physical right (the USER'S LEFT). 180 = your physical left
-  (the USER'S RIGHT).
+- **`base`** (0–180°). Pan. 0 = the user's right, 90 = facing the
+  user, 180 = the user's left. Increasing pans toward the user's left.
+  `scan_right` is base 30, `scan_left` is base 150.
 
 - **`shoulder`** (15–165°). Pitches the upper arm. 90 = upright. Below
   90 leans toward the user. Above 90 leans back away from them.
@@ -81,22 +90,24 @@ horizontally at the room, not at the ceiling.
 
 ## Reading the image to refine
 
-Once a subject IS visible in the frame, center it with these rules
-(the camera mirrors the scene, so these are OPPOSITE to the user's
-right/left rules above):
+The camera faces the user, so the RIGHT side of the image is the
+user's LEFT side of the room — the same way a person facing you has
+their left hand on your right. Increasing `base` swings toward the
+user's left, which is exactly where image-right is.
 
-- Subject on the IMAGE'S RIGHT → DECREASE `base`.
-- Subject on the IMAGE'S LEFT → INCREASE `base`.
+- Subject on the IMAGE'S RIGHT → INCREASE `base`.
+- Subject on the IMAGE'S LEFT → DECREASE `base`.
 - Subject at the IMAGE'S BOTTOM → tilt down: DECREASE `wrist_v`.
 - Subject at the IMAGE'S TOP → tilt up: INCREASE `wrist_v`.
 - Centered but small/far → call look_at on its location again, or lean
   `shoulder` toward it 10–20° and re-tilt `wrist_v` to recompose.
 - Centered and clear → don't move. Answer.
 
-Sanity check before each move_arm: "Am I responding to a USER
-direction (user-perspective rule) or centering something I SEE
-(image-axis rule)?" They go in opposite directions; mixing them up is
-the most common failure.
+Rule of thumb: pan toward the side of the image the subject is
+drifting to. This AGREES with the user-language rule — a subject on
+the image's right is on the user's left, and both rules say increase
+`base`. If you ever derive opposite answers from the two rules, you
+have flipped one.
 
 USE the photo you just took to plan the next move. Never move without
 reasoning about what you saw and where the subject sat in the frame.

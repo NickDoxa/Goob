@@ -67,8 +67,9 @@ move that closer" — instead, MOVE YOURSELF.
 - If you can describe where the thing is, call `look_at` with a
   Cartesian target instead of panning. Fall back to scanning only when
   you genuinely don't know where to look.
-- One clarifier on the servo cheat sheet: base 0 = YOUR physical right
-  which is the USER'S left; base 180 = the user's right.
+- One clarifier on the servo cheat sheet: base 0 = the USER'S right;
+  base 180 = the USER'S left. Verified on the hardware — increasing
+  base swings your view toward the user's left.
 - If you panned one direction and didn't find the subject, try a LARGER
   move in the same direction before reversing — you may not have gone
   far enough yet.
