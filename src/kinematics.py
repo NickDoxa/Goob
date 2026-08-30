@@ -164,11 +164,12 @@ _CHI_STEP_DEG = 2.0
 #     +x = the USER'S right      (= the arm's physical LEFT)
 #     +y = from the arm toward the user
 #     +z = up
-# This matches the mirrored direction language already in llm.py's
-# MOVE_ARM_TOOL: "the user is facing you, so their right is your physical
-# left". It is deliberately user-centric and therefore LEFT-handed: with y
-# pointing at the user and z up, a right-handed frame would put the user's
-# right at -x.
+# This matches the user-perspective direction language in llm.py's
+# MOVE_ARM_TOOL and LOOK_AT_TOOL. It is deliberately user-centric and
+# therefore LEFT-handed: with y pointing at the user and z up, a
+# right-handed frame would put the user's right at -x. (The user faces the
+# arm, so their right really is the arm's physical left; that mirror is a
+# fact about the room, not about the servos.)
 #
 # INTERNAL frame (the ikpy chain), same origin:
 #     +x = the arm's physical right (= the user's LEFT)
@@ -202,18 +203,26 @@ def _mirror_x(x: float, y: float, z: float) -> tuple[float, float, float]:
 def base_servo_to_chain(deg: float) -> float:
     """base servo -> rotation about +z, measured CCW from the internal +x.
 
-    Derivation: servo 0 = the arm's physical right = internal +x = 0 rad.
-    Servo 90 = forward, toward the user = internal +y = pi/2. Servo 180 =
-    the arm's left = -x = pi. Linear and offset-free, so the mapping is the
-    identity in radians. (The user-facing mirror lives in _mirror_x, NOT
-    here — putting it in both places is the classic way to get a bot that
-    confidently looks the wrong way.)
+    Derivation, from hardware (2026-08-30 left/right calibration on the real
+    arm): servo 90 = forward, toward the user = internal +y = pi/2. Raising
+    the servo swings the view toward the USER'S LEFT, and the user's left is
+    the arm's physical right = internal +x. So servo 180 = internal +x =
+    0 rad, and servo 0 = the user's right = internal -x = pi. Unit slope,
+    negative sign, 180 offset:
+
+        chain_deg = 180 - servo_deg
+
+    Only the SIGN of the base yaw lives here. The public<->internal x mirror
+    lives in _mirror_x and is a separate fact (the public frame is stated
+    from the user's point of view, the chain frame from the arm's). Fixing a
+    mirrored left/right in both places at once is the classic way to get a
+    bot that confidently looks the wrong way.
     """
-    return math.radians(deg)
+    return math.radians(180.0 - deg)
 
 
 def chain_to_base_servo(rad: float) -> float:
-    return math.degrees(rad)
+    return 180.0 - math.degrees(rad)
 
 
 def shoulder_servo_to_chain(deg: float) -> float:
@@ -307,13 +316,20 @@ def chain_to_wrist_v_servo(rad: float) -> float:
 #     calipers; CAMERA_OFFSET_MM is the likeliest culprit because it is the
 #     shortest and the only one not published by TinkerKit.
 #   * Left/right mirrored -> _mirror_x or base_servo_to_chain, and fix it in
-#     exactly ONE of them.
+#     exactly ONE of them. This HAPPENED (2026-08-30): "look left" panned to
+#     the user's right. The fix went into base_servo_to_chain, because the
+#     wrong claim was about the servo ("servo 0 = the arm's physical right"),
+#     not about either frame — both frame definitions above are unchanged,
+#     the chain frame stays right-handed, and _mirror_x stays a pure mirror.
+#     The base servo simply counts the other way around +z than assumed.
 #
 # Servo-angle summary, for the record:
 #
 #   joint     servo range   chain angle (rad)          chain 0 means
 #   -------   -----------   ------------------------   ---------------------
-#   base      0..180        radians(servo)             arm's physical right
+#   base      0..180        radians(180 - servo)       arm's physical right
+#                                                      (= the user's LEFT,
+#                                                       i.e. base servo 180)
 #   shoulder  15..165       radians(servo)             upper arm horizontal
 #   elbow     0..180        radians(90 - servo)        forearm inline
 #   wrist_v   0..180        radians(servo - 90)        gripper inline
@@ -667,7 +683,7 @@ def solve_look_at(x_cm: float, y_cm: float, z_cm: float,
         # Straight above the base: azimuth is undefined, keep where we are.
         base_deg = float(current["base"])
     else:
-        base_deg = math.degrees(math.atan2(yi, xi))
+        base_deg = chain_to_base_servo(math.atan2(yi, xi))
         lo, hi = LIMITS.base
         if base_deg < lo - 5.0 or base_deg > hi + 5.0:
             raise KinematicsError(

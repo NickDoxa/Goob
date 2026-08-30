@@ -103,19 +103,28 @@ MOVE_ARM_TOOL = {
         "Fine-grained joint control. Use this when no preset fits, or to "
         "refine a pose after go_to_pose. Returns a fresh photo of the new "
         "view.\n\n"
-        "DIRECTION CONVENTIONS — read carefully, these are mirrored:\n"
+        "DIRECTION CONVENTIONS — read carefully. Everything below is from "
+        "the USER'S point of view, and `base` is numbered to match: "
+        "0 = the user's right, 90 = facing the user, 180 = the user's "
+        "left.\n"
         "- USER says 'right' or 'look right' → swing toward the user's "
-        "right side → INCREASE `base` toward 180. The user is facing you, "
-        "so their right is your physical left.\n"
-        "- USER says 'left' or 'look left' → DECREASE `base` toward 0.\n"
+        "right side → DECREASE `base` toward 0.\n"
+        "- USER says 'left' or 'look left' → swing toward the user's left "
+        "side → INCREASE `base` toward 180.\n"
         "- IMAGE-axis centering (subject visible in the current frame): "
-        "subject on the IMAGE'S right → DECREASE `base`; image's left → "
-        "INCREASE `base`. (The image's right is the user's left because "
-        "the camera mirrors them, like a webcam.)\n"
+        "your camera faces the user, so the RIGHT side of your image is "
+        "the user's LEFT side of the room — the same way a person facing "
+        "you has their left hand on your right. Raising `base` swings "
+        "toward the user's left, which is exactly where image-right is. "
+        "So: subject on the IMAGE'S right → INCREASE `base`; subject on "
+        "the IMAGE'S left → DECREASE `base`. In short, always pan toward "
+        "the side of the image the subject is drifting to.\n"
         "- Subject at IMAGE'S bottom → tilt down: DECREASE `wrist_v` or "
         "  `shoulder`. Top → tilt up: INCREASE `wrist_v`.\n"
-        "When in doubt about user-language right/left, default to the "
-        "user-perspective rule above."
+        "The two horizontal rules agree: a subject on the image's right IS "
+        "on the user's left, and both say INCREASE `base`. If you ever "
+        "derive opposite answers from them, you have flipped one — "
+        "re-read this block."
     ),
     "input_schema": {
         "type": "object",
@@ -123,8 +132,8 @@ MOVE_ARM_TOOL = {
             "base":     {"type": "integer", "minimum": 0,  "maximum": 180,
                          "description": (
                              "Pan. 90 = forward (toward user). "
-                             "180 = swing to the USER'S right side. "
-                             "0 = swing to the USER'S left side."
+                             "0 = swing to the USER'S right side. "
+                             "180 = swing to the USER'S left side."
                          )},
             "shoulder": {"type": "integer", "minimum": 15, "maximum": 165,
                          "description": "Shoulder pitch. 90 = upright; lower leans forward; higher leans back."},

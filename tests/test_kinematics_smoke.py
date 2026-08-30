@@ -174,16 +174,18 @@ def test_conventions() -> None:
         fwd[1] > 10.0 and abs(fwd[0]) < 0.5,
         f"cam=({fwd[0]:.1f},{fwd[1]:.1f})",
     )
-    right, _ = forward_camera(_pose(base=180, **out))
+    # Measured on the hardware: raising the base servo pans toward the
+    # user's LEFT. So 0 is the user's right and 180 is the user's left.
+    right, _ = forward_camera(_pose(base=0, **out))
     check(
-        "base 180 swings to the USER'S right (+x)",
+        "base 0 swings to the USER'S right (+x)",
         right[0] > 10.0 and abs(right[1]) < 0.5,
         f"cam x={right[0]:.1f}cm",
     )
-    left, _ = forward_camera(_pose(base=0, **out))
+    left, _ = forward_camera(_pose(base=180, **out))
     check(
-        "base 0 swings to the USER'S left (-x)",
-        left[0] < -10.0,
+        "base 180 swings to the USER'S left (-x)",
+        left[0] < -10.0 and abs(left[1]) < 0.5,
         f"cam x={left[0]:.1f}cm",
     )
 
@@ -228,6 +230,23 @@ def test_conventions() -> None:
         "wrist_v above 90 tilts the camera up",
         up_dir[2] > level_dir[2] + 0.5,
         f"dz {level_dir[2]:.2f} -> {up_dir[2]:.2f}",
+    )
+
+    # The solver has to agree with the same convention: the public frame's
+    # +x is the user's right, and the user's right is the LOW end of the
+    # base servo. This is the check that fails if someone "fixes" a mirrored
+    # left/right in two places at once.
+    to_the_right = solve_look_at(30.0, 25.0, 10.0, POSES["home"])
+    check(
+        "look_at to the user's right (+x) gives base below 90",
+        to_the_right["base"] < 90,
+        f"base={to_the_right['base']}",
+    )
+    to_the_left = solve_look_at(-30.0, 25.0, 10.0, POSES["home"])
+    check(
+        "look_at to the user's left (-x) gives base above 90",
+        to_the_left["base"] > 90,
+        f"base={to_the_left['base']}",
     )
 
 
@@ -324,12 +343,23 @@ def test_unreachable() -> None:
     # Points close to the base are NOT in this list any more. With the camera
     # perpendicular to the gripper the lens can stand off to one side and
     # look back over the base, so "inside my own shoulder" is now a solvable
-    # top-down/reverse view rather than an error. What still fails is running
-    # out of joint travel: far out to one side AND high up.
+    # top-down/reverse view rather than an error.
+    #
+    # Nor is "far out to one side AND high up" here any more. Aiming at a
+    # distant point only asks for a DIRECTION, and the fully-extended arm can
+    # point almost anywhere in the forward half-space, so distant targets
+    # nearly always solve. (The one that used to be asserted here,
+    # (-120, 10, 150), sat exactly on the fully-extended boundary and its
+    # outcome turned on floating-point rounding — see the note in the report:
+    # _feasible_d_intervals clamps d to where the arm is exactly straight,
+    # and acos then lands on either side of 1.0 at random.)
+    #
+    # What is left is structural: below the desk, and outside the base's
+    # forward half-circle.
     cases = [
         ("below the desk", (0.0, 30.0, -5.0)),
         ("behind the base", (0.0, -30.0, 20.0)),
-        ("far left and near the ceiling", (-120.0, 10.0, 150.0)),
+        ("out to the side and behind the base", (-60.0, -10.0, 30.0)),
     ]
     for label, target in cases:
         try:

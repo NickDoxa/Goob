@@ -39,17 +39,19 @@ LIMITS = ServoLimits()
 # rotates the image dynamically based on the wrist_r passed at capture, so
 # Claude is free to spin the wrist for personality moves.
 #
-# scan_left / scan_right are USER-perspective: scan_right swings toward the
-# user's right side, which is the arm's PHYSICAL left (base toward 180).
-# The user is facing the arm; their right is the arm's left. We name from
-# the user's POV because that's what conversation uses.
+# scan_left / scan_right are USER-perspective, because that's what
+# conversation uses. Measured on the hardware (2026-08-30): RAISING the base
+# servo swings the arm and its view toward the USER'S LEFT. So base 0 = the
+# user's right, base 90 = facing the user, base 180 = the user's left, and
+# scan_left is the HIGH base value. tests/test_kinematics_smoke.py checks
+# these two against forward kinematics.
 POSES: dict[str, dict[str, int]] = {
     "home":          dict(base=90,  shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
     "look_at_hands": dict(base=90,  shoulder=75,  elbow=80,  wrist_v=70,  wrist_r=90, gripper=10),
     "look_down":     dict(base=90,  shoulder=130, elbow=140, wrist_v=40,  wrist_r=90, gripper=10),
     "look_up":       dict(base=90,  shoulder=110, elbow=60,  wrist_v=140, wrist_r=90, gripper=10),
-    "scan_left":     dict(base=30,  shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
-    "scan_right":    dict(base=150, shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
+    "scan_left":     dict(base=150, shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
+    "scan_right":    dict(base=30,  shoulder=90,  elbow=90,  wrist_v=90,  wrist_r=90, gripper=10),
 }
 
 
