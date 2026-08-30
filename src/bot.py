@@ -26,6 +26,7 @@ import discord
 from src import config
 from src.arm import ArmController
 from src.camera import Camera
+from src.kinematics import solve_look_at
 from src.llm import TurnResult, ask_claude
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,14 @@ class GoobClient(discord.Client):
             except Exception:
                 logger.exception("voice listener failed to start")
 
+    def _look_at(self, x_cm: float, y_cm: float, z_cm: float) -> None:
+        # Warm-start from where the arm actually is so the solver prefers a
+        # nearby posture and the move stays short. solve_look_at raises
+        # KinematicsError for unreachable targets; llm.py turns that into a
+        # tool error Claude can read and retry from.
+        angles = solve_look_at(x_cm, y_cm, z_cm, self.arm.pose)
+        self.arm.move(**angles)
+
     def _capture(self) -> bytes:
         # Camera reads the arm's current wrist roll so it can rotate the
         # frame back to upright. Lets Claude spin the gripper for fun
@@ -161,6 +170,7 @@ class GoobClient(discord.Client):
             self._capture,
             self.arm.move,
             self.arm.move_to_pose,
+            self._look_at,
             prior,
         )
         # _trim_to_complete is a no-op on clean completions and salvages

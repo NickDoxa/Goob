@@ -10,7 +10,9 @@ from __future__ import annotations
 import logging
 
 from src import config
+from src.arm import POSES
 from src.camera import Camera
+from src.kinematics import solve_look_at
 from src.llm import ask_claude
 
 
@@ -22,9 +24,18 @@ def _mock_pose(name: str) -> None:
     print(f"  [mock pose] {name}")
 
 
+def _mock_look_at(x_cm: float, y_cm: float, z_cm: float) -> None:
+    # Solve for real (pure math, no hardware) so the smoke test exercises
+    # the kinematics and shows what Claude's targets resolve to.
+    angles = solve_look_at(x_cm, y_cm, z_cm, POSES["home"])
+    print(f"  [mock look_at] ({x_cm}, {y_cm}, {z_cm}) -> {angles}")
+
+
 def _run(prompt: str, cam: Camera) -> None:
     print(f"\n>>> {prompt}")
-    result = ask_claude(prompt, cam.capture_jpeg, _mock_move, _mock_pose)
+    result = ask_claude(
+        prompt, cam.capture_jpeg, _mock_move, _mock_pose, _mock_look_at
+    )
     print(f"text: {result.text}")
     print(
         f"looks: {result.look_count}, moves: {result.move_count}, "

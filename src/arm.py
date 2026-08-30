@@ -94,6 +94,12 @@ class ArmController:
     def current_wrist_r(self) -> int:
         return self._pose["wrist_r"]
 
+    @property
+    def pose(self) -> dict[str, int]:
+        """Copy of the tracked pose. Copy so callers (kinematics warm-start)
+        can't mutate the arm's idea of where it is."""
+        return dict(self._pose)
+
     def __enter__(self) -> "ArmController":
         self._ser = serial.Serial(self.port, self.baudrate, timeout=0.5)
         deadline = time.monotonic() + self.ready_timeout

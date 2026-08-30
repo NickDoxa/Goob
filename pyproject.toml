@@ -7,6 +7,9 @@ dependencies = [
     "discord.py>=2.3",
     "anthropic>=0.40",
     "opencv-python>=4.8",
+    # Inverse kinematics for the look_at tool (src/kinematics.py). numpy
+    # arrives transitively via opencv-python.
+    "ikpy>=3.4",
     "pyserial>=3.5",
     "pydantic>=2.5",
     "python-dotenv>=1.0",

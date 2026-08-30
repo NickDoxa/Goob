@@ -1,13 +1,15 @@
 """Claude vision + agentic tool loop.
 
 Each Discord (or voice) turn calls `ask_claude(text, capture, move,
-go_to_pose)`. The function runs an agentic loop with three client-side
-tools:
+go_to_pose, look_at)`. The function runs an agentic loop with four
+client-side tools:
 
 - `look` — capture a fresh photo without moving.
 - `go_to_pose` — snap to a named preset (home, look_at_hands, look_down,
   look_up, scan_left, scan_right). Faster and more reliable than reasoning
   out 6 joint angles for common scenarios.
+- `look_at` — aim the camera at a Cartesian point in the room. Backed by
+  src.kinematics; Claude gives a location, not angles.
 - `move_arm` — fine-grained joint control. Used to refine after a preset,
   or for poses that don't match a named preset.
 
@@ -138,8 +140,49 @@ MOVE_ARM_TOOL = {
     },
 }
 
+LOOK_AT_TOOL = {
+    "name": "look_at",
+    "description": (
+        "Aim your camera at a point in the room and return a fresh photo. "
+        "You give a location, not joint angles — inverse kinematics works "
+        "out the pose and backs the camera off to a sensible viewing "
+        "distance. Prefer this over move_arm whenever you can describe "
+        "WHERE something is.\n\n"
+        "The frame is centred on your base, on the desk, and described from "
+        "the USER'S point of view (they're facing you):\n"
+        "- x_cm: sideways. Negative = the user's LEFT, positive = the user's "
+        "RIGHT, 0 = straight ahead. (Their right is your physical left — the "
+        "tool handles the mirror, just say where the thing is from their "
+        "side.)\n"
+        "- y_cm: how far out from your base, toward the user. Always "
+        "positive; you can't look behind yourself.\n"
+        "- z_cm: height above the desk surface. 0 = the desk itself.\n\n"
+        "Anchors to calibrate against:\n"
+        "- the user's hands, seated at the desk: about (0, 35, 25)\n"
+        "- the desk surface right in front of you: about (0, 20, 5)\n"
+        "- the user's face: about (0, 45, 45)\n"
+        "- a mug to the user's right on the desk: about (20, 25, 5)\n\n"
+        "If the point is unreachable you get an error explaining why — "
+        "adjust and retry, or fall back to go_to_pose. After looking, "
+        "refine with move_arm if the subject isn't centred."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "x_cm": {"type": "number",
+                     "description": "Sideways offset. Negative = user's left, positive = user's right."},
+            "y_cm": {"type": "number",
+                     "description": "Distance out from your base toward the user, in cm. Must be positive."},
+            "z_cm": {"type": "number",
+                     "description": "Height above the desk in cm. 0 = the desk surface."},
+        },
+        "required": ["x_cm", "y_cm", "z_cm"],
+    },
+}
+
+
 def _build_tools() -> list[dict]:
-    tools: list[dict] = [LOOK_TOOL, GO_TO_POSE_TOOL, MOVE_ARM_TOOL]
+    tools: list[dict] = [LOOK_TOOL, GO_TO_POSE_TOOL, LOOK_AT_TOOL, MOVE_ARM_TOOL]
     if config.WEB_SEARCH_ENABLED:
         # Anthropic server-side tool. Executed inside messages.create; we
         # never see a client tool_use for it. max_uses caps searches per
@@ -261,6 +304,7 @@ def ask_claude(
     capture: Callable[[], bytes],
     move: Callable[..., None],
     go_to_pose: Callable[[str], None],
+    look_at: Callable[[float, float, float], None],
     prior_messages: Optional[list[dict]] = None,
     max_turns: int = 12,
 ) -> TurnResult:
@@ -380,6 +424,47 @@ def ask_claude(
                     "tool_use_id": block.id,
                     "content": [
                         {"type": "text", "text": "moved; here is the new view from the camera:"},
+                        _image_block(last_jpeg),
+                    ],
+                })
+            elif block.name == "look_at":
+                args = dict(block.input)
+                logger.info("agentic look_at %d: %s", move_count + 1, args)
+                try:
+                    look_at(
+                        float(args["x_cm"]),
+                        float(args["y_cm"]),
+                        float(args["z_cm"]),
+                    )
+                except Exception as exc:
+                    # Includes KinematicsError for unreachable targets. Its
+                    # message is written to be read by Claude, which can then
+                    # pick a different point instead of giving up.
+                    logger.warning("look_at failed: %s", exc)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": f"can't aim there: {exc}",
+                        "is_error": True,
+                    })
+                    continue
+                move_count += 1
+                try:
+                    last_jpeg = capture()
+                except Exception as exc:
+                    logger.warning("recapture failed: %s", exc)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": f"aimed but camera recapture failed: {exc}",
+                        "is_error": True,
+                    })
+                    continue
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": [
+                        {"type": "text", "text": "aimed there; here is the new view:"},
                         _image_block(last_jpeg),
                     ],
                 })
